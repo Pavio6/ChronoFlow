@@ -1,0 +1,72 @@
+version: '3.8'
+
+services:
+  # ChronoFlow 应用服务
+  chronoflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chronoflow
+    ports:
+      - "8080:8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      - GIN_MODE=release
+    volumes:
+      - ./config:/app/config
+      - ./logs:/app/logs
+    networks:
+      - chronoflow-network
+    restart: unless-stopped
+
+  # MySQL 数据库
+  mysql:
+    image: mysql:8.0
+    container_name: chronoflow-mysql
+    ports:
+      - "3306:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: "123456"
+      MYSQL_DATABASE: chronoflow
+      MYSQL_CHARSET: utf8mb4
+      MYSQL_COLLATION: utf8mb4_unicode_ci
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - chronoflow-network
+    restart: unless-stopped
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    container_name: chronoflow-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - chronoflow-network
+    restart: unless-stopped
+
+volumes:
+  mysql-data:
+  redis-data:
+
+networks:
+  chronoflow-network:
+    driver: bridge

@@ -1,0 +1,39 @@
+# ChronoFlow 配置文件
+
+server:
+  port: 8080
+  mode: debug  # debug | release | test
+
+database:
+  driver: mysql  # mysql | postgres
+  dsn: "root:123456@tcp(127.0.0.1:3306)/chronoflow?charset=utf8mb4&parseTime=True&loc=Local"
+  max_open_conns: 100
+  max_idle_conns: 10
+  conn_max_lifetime: 3600  # 秒
+
+redis:
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 0
+  pool_size: 10
+
+scheduler:
+  scan_interval: 5  # 扫描间隔（秒）
+  batch_size: 100   # 每批扫描任务数
+
+executor:
+  timeout: 30       # HTTP 回调超时时间（秒）
+  max_retries: 3    # 最大重试次数
+  worker_pool_size: 10  # 工作池大小
+
+retry:
+  strategy: exponential  # exponential | fixed
+  initial_interval: 10   # 初始重试间隔（秒）
+  max_interval: 60       # 最大重试间隔（秒）
+  multiplier: 3.0        # 指数退避倍数
+
+log:
+  level: info  # debug | info | warn | error
+  format: json  # json | console
+  output: stdout  # stdout | file
+  file_path: ./logs/chronoflow.log
