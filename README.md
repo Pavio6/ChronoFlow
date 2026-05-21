@@ -31,13 +31,15 @@
 
 | 组件 | 技术 |
 |------|------|
-| 语言 | Go 1.21+ |
+| 语言 | Go 1.26.2+ |
 | Web 框架 | Gin |
 | 数据库 | MySQL / PostgreSQL |
 | 缓存与队列 | Redis ZSet |
 | Cron 解析 | robfig/cron |
 | 日志 | zap |
 | 配置 | viper |
+| 前端 | React + TypeScript + Ant Design |
+| 前端构建 | Vite |
 | 容器化 | Docker / Docker Compose |
 
 ## 系统架构
@@ -214,6 +216,19 @@ ChronoFlow/
 ├── pkg/
 │   └── logger/
 │       └── logger.go            # 日志工具
+├── web/                         # 前端项目
+│   ├── src/
+│   │   ├── api/                 # API 客户端
+│   │   ├── components/          # 公共组件
+│   │   ├── layouts/             # 布局组件
+│   │   ├── pages/               # 页面组件
+│   │   │   ├── TaskList.tsx     # 任务列表
+│   │   │   ├── TaskForm.tsx     # 任务表单
+│   │   │   └── ExecutionList.tsx # 执行记录
+│   │   ├── types/               # TypeScript 类型
+│   │   └── utils/               # 工具函数
+│   ├── package.json
+│   └── vite.config.ts
 ├── config/
 │   └── config.yaml              # 配置文件
 ├── migrations/
@@ -228,11 +243,14 @@ ChronoFlow/
 
 ### 环境要求
 
-- Go 1.21+
+- Go 1.26.2+
+- Node.js 18+ (前端开发)
 - MySQL 8.0+ 或 PostgreSQL
 - Redis 7.0+
 
 ### 本地开发
+
+#### 后端开发
 
 1. 克隆项目
 
@@ -257,11 +275,41 @@ go mod tidy
 mysql -u root -p < migrations/001_init.sql
 ```
 
-5. 启动服务
+5. 启动后端服务
 
 ```bash
 go run cmd/server/main.go
 ```
+
+#### 前端开发
+
+1. 进入前端目录
+
+```bash
+cd web
+```
+
+2. 安装依赖
+
+```bash
+npm install
+```
+
+3. 启动开发服务器
+
+```bash
+npm run dev
+```
+
+前端开发服务器将在 http://localhost:3000 启动，API 请求会自动代理到后端 http://localhost:8080。
+
+4. 构建生产版本
+
+```bash
+npm run build
+```
+
+构建产物将输出到 `web/dist` 目录，后端会自动服务这些静态文件。
 
 ### Docker Compose 部署
 
