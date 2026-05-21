@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -92,6 +94,32 @@ func main() {
 	// 注册路由
 	taskHandler := handler.NewTaskHandler(taskService, execService)
 	taskHandler.RegisterRoutes(r)
+
+	// 静态文件服务 - 前端资源
+	frontendDir := "./web/dist"
+	if _, err := os.Stat(frontendDir); err == nil {
+		// 服务静态资源文件
+		r.Static("/assets", filepath.Join(frontendDir, "assets"))
+
+		// 处理 SPA 路由 - 所有非 API 请求返回 index.html
+		r.NoRoute(func(c *gin.Context) {
+			// 如果是 API 请求，返回 404
+			if strings.HasPrefix(c.Request.URL.Path, "/api") {
+				c.JSON(http.StatusNotFound, gin.H{
+					"code":    404,
+					"message": "API not found",
+				})
+				return
+			}
+
+			// 否则返回 index.html（支持前端路由）
+			c.File(filepath.Join(frontendDir, "index.html"))
+		})
+
+		logger.Info("frontend static files served", zap.String("dir", frontendDir))
+	} else {
+		logger.Warn("frontend directory not found, skipping static file serving")
+	}
 
 	// 创建 HTTP 服务器
 	srv := &http.Server{
