@@ -10,7 +10,6 @@ import (
 
 	"go.uber.org/zap"
 	"gorm.io/driver/mysql"
-	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/schema"
 )
@@ -25,8 +24,6 @@ func InitDatabase(cfg *config.DatabaseConfig) error {
 	switch cfg.Driver {
 	case "mysql":
 		dialector = mysql.Open(cfg.DSN)
-	case "postgres":
-		dialector = postgres.Open(cfg.DSN)
 	default:
 		return fmt.Errorf("unsupported database driver: %s", cfg.Driver)
 	}

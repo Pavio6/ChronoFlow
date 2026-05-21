@@ -5,7 +5,7 @@ server:
   mode: debug  # debug | release | test
 
 database:
-  driver: mysql  # mysql | postgres
+  driver: mysql
   dsn: "root:123456@tcp(127.0.0.1:3306)/chronoflow?charset=utf8mb4&parseTime=True&loc=Local"
   max_open_conns: 100
   max_idle_conns: 10

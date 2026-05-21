@@ -32,7 +32,7 @@ type TaskExecution struct {
 	ErrorMessage   string          `json:"error_message" gorm:"type:text;comment:错误信息"`
 	StartedAt      *time.Time      `json:"started_at" gorm:"comment:开始时间"`
 	FinishedAt     *time.Time      `json:"finished_at" gorm:"comment:完成时间"`
-	Duration       int64           `json:"duration" gorm:"comment:执行时长(毫秒)`
+	Duration       int64           `json:"duration" gorm:"comment:执行时长(毫秒)"`
 	NextRetryTime  *time.Time      `json:"next_retry_time" gorm:"index;comment:下次重试时间"`
 	CreatedAt      time.Time       `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt      time.Time       `json:"updated_at" gorm:"autoUpdateTime"`
