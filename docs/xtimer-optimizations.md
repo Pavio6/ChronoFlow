@@ -64,30 +64,40 @@ pool.Submit(func() { ... })
 ## 2. 布隆过滤器去重
 
 ### 实现位置
-`pkg/bloom/filter.go`
+`internal/pkg/bloom/filter.go`
 
-### 代码实现
+### ChronoFlow 实现
 ```go
 type Filter struct {
-    client     *redis.Client
-    encryptor1 *hash.SHA1Encryptor
-    encryptor2 *hash.Murmur3Encyptor
+    client *redis.Client
 }
 
 func (f *Filter) Exist(ctx context.Context, key, val string) (bool, error) {
-    rawVal1 := f.encryptor1.Encrypt(val)
-    if exist, err := f.client.GetBit(ctx, key, int32(rawVal1%math.MaxInt32)); err != nil || exist {
-        return exist, err
+    offset1 := f.hashSHA1(val)
+    offset2 := f.hashMurmur3(val)
+    
+    exist1, err := f.client.GetBit(ctx, key, int64(offset1)).Result()
+    if err != nil || exist1 == 0 {
+        return false, err
     }
-    rawVal2 := f.encryptor2.Encrypt(val)
-    return f.client.GetBit(ctx, key, int32(rawVal2%math.MaxInt32))
+    
+    exist2, err := f.client.GetBit(ctx, key, int64(offset2)).Result()
+    return exist2 == 1, nil
+}
+
+func (f *Filter) Set(ctx context.Context, key, val string, expireSeconds int64) error {
+    // 使用 pipeline 批量设置位
+    pipe := f.client.Pipeline()
+    pipe.SetBit(ctx, key, int64(offset1), 1)
+    pipe.SetBit(ctx, key, int64(offset2), 1)
+    // 设置过期时间
 }
 ```
 
 ### 设计参数
 - **m**: 2^32（Redis bitmap 最大长度）
 - **n**: 10^6（假设每天 100 万任务）
-- **k**: 2（使用两个 hash 函数）
+- **k**: 2（使用 SHA1 + Murmur3 双 hash 函数）
 - **失效率**: 2 × 10^-7
 
 ### 优势
@@ -96,31 +106,21 @@ func (f *Filter) Exist(ctx context.Context, key, val string) (bool, error) {
 3. **误判可控**：失效率可计算和控制
 4. **自动过期**：支持 key 过期时间
 
-### 使用场景
+### 集成情况
+✅ **已实现** - 集成到触发器中，用于快速检查任务是否已执行
+
 ```go
-// 执行前检查是否已执行
-if exist, _ := bloomFilter.Exist(ctx, key, timerIDUnixKey); exist {
-    return nil // 跳过重复执行
+// internal/service/trigger.go
+bloomKey := fmt.Sprintf("chronoflow:bloom:%s", trigger.TriggerTime.Format("2006-01-02"))
+bloomVal := fmt.Sprintf("%d:%d", trigger.TaskID, trigger.TriggerTime.UnixMilli())
+
+exist, _ := t.bloomFilter.Exist(ctx, bloomKey, bloomVal)
+if exist {
+    // 进一步检查幂等性
 }
 
 // 执行后设置标记
-bloomFilter.Set(ctx, key, timerIDUnixKey, expireSeconds)
-```
-
-### ChronoFlow 对比
-- **xtimer**: 使用布隆过滤器，空间效率高
-- **ChronoFlow**: 使用 Redis SETNX 幂等键，简单但空间占用较大
-
-### 优化建议
-```go
-// 当前实现
-func (q *RedisQueue) SetIdempotentKey(ctx context.Context, taskID int64, triggerTime time.Time, expiration time.Duration) (bool, error) {
-    key := fmt.Sprintf("%s%d:%s", IdempotentPrefix, taskID, triggerTime.Format(time.RFC3339))
-    return q.client.SetNX(ctx, key, "1", expiration).Result()
-}
-
-// 建议实现（可选，适合大量任务场景）
-// 使用布隆过滤器替代 SETNX，空间效率更高
+t.bloomFilter.Set(ctx, bloomKey, bloomVal, 86400)
 ```
 
 ---
@@ -210,77 +210,80 @@ close(s.stopCh)
 ## 4. Prometheus 监控指标
 
 ### 实现位置
-`pkg/promethus/reporter.go`
+`internal/pkg/metrics/reporter.go`
+
+### ChronoFlow 实现
+```go
+type Reporter struct {
+    taskExecTotal    *prometheus.CounterVec
+    taskExecDuration *prometheus.HistogramVec
+    taskExecSuccess  *prometheus.CounterVec
+    taskExecFailed   *prometheus.CounterVec
+    taskExecRetry    *prometheus.CounterVec
+    taskTriggerTotal *prometheus.CounterVec
+}
+
+func NewReporter() *Reporter {
+    return &Reporter{
+        taskExecTotal: promauto.NewCounterVec(
+            prometheus.CounterOpts{
+                Name: "chronoflow_task_exec_total",
+                Help: "Total number of task executions",
+            },
+            []string{"task_id", "status"},
+        ),
+        taskExecDuration: promauto.NewHistogramVec(
+            prometheus.HistogramOpts{
+                Name:    "chronoflow_task_exec_duration_seconds",
+                Help:    "Task execution duration in seconds",
+                Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60},
+            },
+            []string{"task_id"},
+        ),
+        // ... 其他指标
+    }
+}
+```
 
 ### 监控指标
 | 指标名 | 类型 | 说明 |
 |--------|------|------|
-| timer_exec_total_cnt | Counter | 任务执行总数 |
-| timer_delay_cnt | Summary | 任务执行延迟 |
-| timer_enabled_cnt | Gauge | 激活态任务总数 |
-| timer_unexeced_cnt | Gauge | 未执行任务数量 |
-
-### 代码实现
-```go
-type Reporter struct {
-    timerExecRecorder     *prometheus.CounterVec
-    timeDelayRecorder     prometheus.ObserverVec
-    timerEnabledRecorder  *prometheus.GaugeVec
-    timerUnexecedRecorder *prometheus.GaugeVec
-}
-
-func (r *Reporter) ReportExecRecord(app string) {
-    r.timerExecRecorder.WithLabelValues(app).Inc()
-}
-
-func (r *Reporter) ReportTimerDelayRecord(app string, cost float64) {
-    r.timeDelayRecorder.WithLabelValues(app).Observe(cost)
-}
-```
+| `chronoflow_task_exec_total` | Counter | 任务执行总数（按状态分类） |
+| `chronoflow_task_exec_duration_seconds` | Histogram | 任务执行延迟分布 |
+| `chronoflow_task_exec_success_total` | Counter | 任务执行成功总数 |
+| `chronoflow_task_exec_failed_total` | Counter | 任务执行失败总数 |
+| `chronoflow_task_exec_retry_total` | Counter | 任务重试总数 |
+| `chronoflow_task_trigger_total` | Counter | 任务触发总数 |
 
 ### 优势
 1. **标准化**：使用 Prometheus 标准指标格式
-2. **多维度**：支持按 app、name 等维度聚合
-3. **分位数**：Summary 支持 P50、P90、P99 等分位数
+2. **多维度**：支持按 task_id、status 等维度聚合
+3. **分位数**：Histogram 支持 P50、P90、P99 等分位数
 4. **可视化**：可与 Grafana 集成
 
-### 使用场景
+### 集成情况
+✅ **已实现** - 集成到执行器中，自动上报监控指标
+
 ```go
-// executor/worker.go
-go w.reportMonitorData(app, unix, execTime)
-
-func (w *Worker) reportMonitorData(app string, expectExecTimeUnix int64, acutalExecTime time.Time) {
-    w.reporter.ReportExecRecord(app)
-    w.reporter.ReportTimerDelayRecord(app, float64(acutalExecTime.UnixMilli()-expectExecTimeUnix))
-}
-```
-
-### ChronoFlow 对比
-- **xtimer**: 完整的 Prometheus 监控
-- **ChronoFlow**: 仅使用 zap 日志记录
-
-### 优化建议
-```go
-// 建议添加 Prometheus 监控
-import "github.com/prometheus/client_golang/prometheus"
-
-var (
-    taskExecTotal = prometheus.NewCounterVec(
-        prometheus.CounterOpts{
-            Name: "chronoflow_task_exec_total",
-            Help: "Total number of task executions",
-        },
-        []string{"task_id", "status"},
-    )
+// internal/service/executor.go
+func (e *Executor) execute(ctx context.Context, execution *model.TaskExecution, task *model.Task) {
+    // 执行 HTTP 回调
+    response, err := e.doHTTPRequest(ctx, execution)
     
-    taskExecDuration = prometheus.NewHistogramVec(
-        prometheus.HistogramOpts{
-            Name: "chronoflow_task_exec_duration_seconds",
-            Help: "Task execution duration in seconds",
-        },
-        []string{"task_id"},
-    )
-)
+    // 上报监控指标
+    taskIDStr := fmt.Sprintf("%d", task.ID)
+    durationSeconds := float64(execution.Duration) / 1000.0
+    e.metrics.ReportExecDuration(taskIDStr, durationSeconds)
+    e.metrics.ReportTrigger(taskIDStr)
+    
+    if err != nil {
+        e.metrics.ReportExecFailed(taskIDStr)
+        e.metrics.ReportExecRecord(taskIDStr, "failed")
+    } else {
+        e.metrics.ReportExecSuccess(taskIDStr)
+        e.metrics.ReportExecRecord(taskIDStr, "success")
+    }
+}
 ```
 
 ---
@@ -443,21 +446,32 @@ container.Provide(NewExecutor)
 
 ## 总结
 
-### 优先级排序
+### 实施状态
 
-| 优先级 | 优化项 | 难度 | 收益 |
-|--------|--------|------|------|
-| P0 | Goroutine 池化 | 低 | 高 |
-| P0 | Prometheus 监控 | 中 | 高 |
-| P1 | 本地缓存 | 中 | 中 |
-| P1 | 布隆过滤器 | 中 | 中 |
-| P2 | SafeChan 封装 | 低 | 低 |
-| P2 | 分桶机制 | 高 | 高 |
-| P3 | 依赖注入 | 高 | 中 |
+| 优先级 | 优化项 | 难度 | 收益 | 状态 |
+|--------|--------|------|------|------|
+| P0 | Goroutine 池化 | 低 | 高 | ⏳ 待实现 |
+| P0 | Prometheus 监控 | 中 | 高 | ✅ 已实现 |
+| P1 | 本地缓存 | 中 | 中 | ⏳ 待实现 |
+| P1 | 布隆过滤器 | 中 | 中 | ✅ 已实现 |
+| P2 | SafeChan 封装 | 低 | 低 | ⏳ 待实现 |
+| P2 | 分桶机制 | 高 | 高 | ⏳ 待实现 |
+| P3 | 依赖注入 | 高 | 中 | ⏳ 待实现 |
 
-### 推荐实施顺序
+### 已实现功能
 
-1. **第一阶段**：添加 Prometheus 监控（可观测性）
-2. **第二阶段**：引入 ants goroutine 池（性能优化）
-3. **第三阶段**：添加本地缓存（减少 DB 压力）
-4. **第四阶段**：实现分桶机制（水平扩展）
+#### 布隆过滤器
+- 位置：`internal/pkg/bloom/filter.go`
+- 集成：`internal/service/trigger.go`
+- 功能：快速检查任务是否已执行，减少 Redis 查询
+
+#### Prometheus 监控
+- 位置：`internal/pkg/metrics/reporter.go`
+- 集成：`internal/service/executor.go`
+- 功能：自动上报执行成功/失败/重试/延迟等指标
+
+### 后续优化建议
+
+1. **第一阶段**：引入 ants goroutine 池（性能优化）
+2. **第二阶段**：添加本地缓存（减少 DB 压力）
+3. **第三阶段**：实现分桶机制（水平扩展）
