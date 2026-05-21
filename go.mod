@@ -1,6 +1,6 @@
 module github.com/chronoflow
 
-go 1.21
+go 1.26.2
 
 require (
 	github.com/gin-gonic/gin v1.9.1
