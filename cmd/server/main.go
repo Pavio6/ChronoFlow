@@ -14,6 +14,8 @@ import (
 	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/handler"
 	"github.com/chronoflow/internal/middleware"
+	"github.com/chronoflow/internal/pkg/bloom"
+	"github.com/chronoflow/internal/pkg/metrics"
 	"github.com/chronoflow/internal/pkg/redis"
 	"github.com/chronoflow/internal/repository"
 	"github.com/chronoflow/internal/service"
@@ -65,6 +67,9 @@ func main() {
 	// 创建 Redis 队列
 	redisQueue := redis.NewRedisQueue(redisClient)
 
+	// 创建布隆过滤器
+	bloomFilter := bloom.NewFilter(redisClient)
+
 	// 创建仓库层
 	taskRepo := repository.NewTaskRepository(repository.DB)
 	execRepo := repository.NewExecutionRepository(repository.DB)
@@ -80,7 +85,11 @@ func main() {
 	scheduler := service.NewScheduler(taskRepo, redisQueue, &cfg.Scheduler)
 
 	// 创建触发器
-	trigger := service.NewTrigger(taskRepo, execRepo, redisQueue, executor, &cfg.Scheduler)
+	trigger := service.NewTrigger(taskRepo, execRepo, redisQueue, executor, bloomFilter, &cfg.Scheduler)
+
+	// 创建 Prometheus 监控
+	metricsReporter := metrics.NewReporter()
+	_ = metricsReporter
 
 	// 创建 Gin 引擎
 	gin.SetMode(cfg.Server.Mode)

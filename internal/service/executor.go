@@ -10,6 +10,7 @@ import (
 
 	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/model"
+	"github.com/chronoflow/internal/pkg/metrics"
 	"github.com/chronoflow/internal/pkg/retry"
 	"github.com/chronoflow/internal/repository"
 	"github.com/chronoflow/pkg/logger"
@@ -26,6 +27,7 @@ type Executor struct {
 	config        *config.ExecutorConfig
 	retryConfig   *config.RetryConfig
 	workerPool    chan struct{}
+	metrics       *metrics.Reporter
 }
 
 // NewExecutor 创建执行器实例
@@ -56,6 +58,7 @@ func NewExecutor(
 		config:      config,
 		retryConfig: retryConfig,
 		workerPool:  make(chan struct{}, config.WorkerPoolSize),
+		metrics:     metrics.NewReporter(),
 	}
 }
 
@@ -100,10 +103,20 @@ func (e *Executor) execute(ctx context.Context, execution *model.TaskExecution, 
 	execution.FinishedAt = &finishedAt
 	execution.Duration = finishedAt.Sub(now).Milliseconds()
 
+	// 上报监控指标
+	taskIDStr := fmt.Sprintf("%d", task.ID)
+	durationSeconds := float64(execution.Duration) / 1000.0
+	e.metrics.ReportExecDuration(taskIDStr, durationSeconds)
+	e.metrics.ReportTrigger(taskIDStr)
+
 	if err != nil {
 		// 执行失败
 		execution.Status = model.ExecutionStatusFAILED
 		execution.ErrorMessage = err.Error()
+
+		// 上报失败监控
+		e.metrics.ReportExecFailed(taskIDStr)
+		e.metrics.ReportExecRecord(taskIDStr, "failed")
 
 		logger.Error("task execution failed",
 			zap.Int64("task_id", task.ID),
@@ -118,6 +131,10 @@ func (e *Executor) execute(ctx context.Context, execution *model.TaskExecution, 
 		execution.Status = model.ExecutionStatusSUCCESS
 		execution.ResponseCode = response.StatusCode
 		execution.ResponseBody = response.Body
+
+		// 上报成功监控
+		e.metrics.ReportExecSuccess(taskIDStr)
+		e.metrics.ReportExecRecord(taskIDStr, "success")
 
 		// 更新任务状态为成功
 		if err := e.taskRepo.UpdateStatus(task.ID, model.TaskStatusSUCCESS); err != nil {
@@ -209,6 +226,8 @@ func (e *Executor) doHTTPRequest(ctx context.Context, execution *model.TaskExecu
 
 // handleRetry 处理重试逻辑
 func (e *Executor) handleRetry(execution *model.TaskExecution, task *model.Task) {
+	taskIDStr := fmt.Sprintf("%d", task.ID)
+
 	// 检查是否可重试
 	if !execution.IsRetryable(task.MaxRetries) {
 		// 超过最大重试次数，标记为失败
@@ -229,6 +248,10 @@ func (e *Executor) handleRetry(execution *model.TaskExecution, task *model.Task)
 	execution.NextRetryTime = &nextRetryTime
 	execution.RetryCount++
 	execution.Status = model.ExecutionStatusRETRYING
+
+	// 上报重试监控
+	e.metrics.ReportExecRetry(taskIDStr)
+	e.metrics.ReportExecRecord(taskIDStr, "retry")
 
 	logger.Info("task scheduled for retry",
 		zap.Int64("task_id", task.ID),

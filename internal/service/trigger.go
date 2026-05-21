@@ -2,10 +2,12 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/model"
+	"github.com/chronoflow/internal/pkg/bloom"
 	"github.com/chronoflow/internal/pkg/redis"
 	"github.com/chronoflow/internal/repository"
 	"github.com/chronoflow/pkg/logger"
@@ -15,12 +17,13 @@ import (
 // Trigger 任务触发器
 // 负责从 Redis 队列中取出到期任务，并创建执行记录交给执行器处理
 type Trigger struct {
-	taskRepo   repository.TaskRepository
-	execRepo   repository.ExecutionRepository
-	redisQueue *redis.RedisQueue
-	executor   *Executor
-	config     *config.SchedulerConfig
-	stopCh     chan struct{}
+	taskRepo     repository.TaskRepository
+	execRepo     repository.ExecutionRepository
+	redisQueue   *redis.RedisQueue
+	executor     *Executor
+	bloomFilter  *bloom.Filter
+	config       *config.SchedulerConfig
+	stopCh       chan struct{}
 }
 
 // NewTrigger 创建触发器实例
@@ -29,15 +32,17 @@ func NewTrigger(
 	execRepo repository.ExecutionRepository,
 	redisQueue *redis.RedisQueue,
 	executor *Executor,
+	bloomFilter *bloom.Filter,
 	config *config.SchedulerConfig,
 ) *Trigger {
 	return &Trigger{
-		taskRepo:   taskRepo,
-		execRepo:   execRepo,
-		redisQueue: redisQueue,
-		executor:   executor,
-		config:     config,
-		stopCh:     make(chan struct{}),
+		taskRepo:    taskRepo,
+		execRepo:    execRepo,
+		redisQueue:  redisQueue,
+		executor:    executor,
+		bloomFilter: bloomFilter,
+		config:      config,
+		stopCh:      make(chan struct{}),
 	}
 }
 
@@ -89,6 +94,28 @@ func (t *Trigger) poll(ctx context.Context) {
 
 // processTask 处理单个任务触发
 func (t *Trigger) processTrigger(ctx context.Context, trigger *redis.TaskTrigger) {
+	// 使用布隆过滤器检查是否已执行（快速检查）
+	bloomKey := fmt.Sprintf("chronoflow:bloom:%s", trigger.TriggerTime.Format("2006-01-02"))
+	bloomVal := fmt.Sprintf("%d:%d", trigger.TaskID, trigger.TriggerTime.UnixMilli())
+	
+	exist, err := t.bloomFilter.Exist(ctx, bloomKey, bloomVal)
+	if err != nil {
+		logger.Error("bloom filter check failed, fallback to idempotent check",
+			zap.Int64("task_id", trigger.TaskID),
+			zap.Error(err),
+		)
+	} else if exist {
+		// 布隆过滤器显示已存在，进一步检查幂等性
+		isIdempotent, err := t.redisQueue.IsIdempotent(ctx, trigger.TaskID, trigger.TriggerTime)
+		if err == nil && isIdempotent {
+			logger.Debug("task already executed (bloom filter hit), skipping",
+				zap.Int64("task_id", trigger.TaskID),
+				zap.Time("trigger_time", trigger.TriggerTime),
+			)
+			return
+		}
+	}
+
 	// 检查幂等性（防止重复执行）
 	isIdempotent, err := t.redisQueue.IsIdempotent(ctx, trigger.TaskID, trigger.TriggerTime)
 	if err != nil {
@@ -182,6 +209,14 @@ func (t *Trigger) processTrigger(ctx context.Context, trigger *redis.TaskTrigger
 
 	// 释放锁
 	t.redisQueue.ReleaseTaskLock(ctx, trigger.TaskID, trigger.TriggerTime)
+
+	// 设置布隆过滤器（标记为已执行）
+	if err := t.bloomFilter.Set(ctx, bloomKey, bloomVal, 86400); err != nil {
+		logger.Error("failed to set bloom filter",
+			zap.Int64("task_id", trigger.TaskID),
+			zap.Error(err),
+		)
+	}
 
 	// 提交到执行器异步执行
 	t.executor.Submit(execution, task)
