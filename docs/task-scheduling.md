@@ -1,0 +1,199 @@
+# 任务调度流程
+
+## 概述
+
+任务调度是 ChronoFlow 的核心功能，负责将任务从数据库调度到 Redis 队列，等待触发执行。
+
+## 调度流程
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                      Scheduler 扫描流程                       │
+└──────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────┐
+                    │  获取需要调度的任务 │
+                    └─────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────┐
+                    │  遍历每个任务      │
+                    └─────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────┐
+                    │  计算下次触发时间   │
+                    │  (Cron 解析)      │
+                    └─────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────┐
+                    │  更新数据库       │
+                    │  next_trigger_time│
+                    └─────────────────┘
+                              │
+                              ▼
+                    ┌─────────────────┐
+                    │  推入 Redis ZSet  │
+                    │  (score=时间戳)   │
+                    └─────────────────┘
+```
+
+## 详细步骤
+
+### 1. 扫描任务
+
+Scheduler 定期从数据库获取需要调度的任务：
+
+```go
+// 获取需要调度的任务
+tasks, err := s.taskRepo.GetTasksToSchedule(s.config.BatchSize)
+```
+
+**查询条件**：
+- 任务状态为 `ENABLED`
+- `next_trigger_time` 为空或已过期
+
+### 2. 计算下次触发时间
+
+使用 robfig/cron 库解析 Cron 表达式：
+
+```go
+// 计算下次触发时间
+nextTime, err := s.cronParser.NextTriggerTime(task.CronExpr, time.Now())
+```
+
+**支持的 Cron 表达式**：
+- 标准 Cron：`* * * * *`
+- 带秒：`*/5 * * * * *`
+- 特殊字符：`@every 5m`
+
+### 3. 更新数据库
+
+将计算出的下次触发时间写入数据库：
+
+```go
+// 更新数据库中的下次触发时间
+if err := s.taskRepo.UpdateNextTriggerTime(task.ID, &nextTime); err != nil {
+    // 错误处理
+}
+```
+
+### 4. 推入 Redis 队列
+
+将任务推入 Redis ZSet，使用触发时间作为 score：
+
+```go
+// 推入 Redis 队列
+trigger := &redis.TaskTrigger{
+    TaskID:      task.ID,
+    TriggerTime: nextTime,
+}
+
+if err := s.redisQueue.PushTask(ctx, trigger); err != nil {
+    // 错误处理
+}
+```
+
+**Redis 数据结构**：
+```
+Key: chronoflow:task_queue
+Type: ZSet
+Member: {"task_id": 123, "trigger_time": "2024-01-01T00:00:00Z"}
+Score: 1704067200 (Unix 时间戳)
+```
+
+## 触发流程
+
+### 1. 轮询到期任务
+
+Trigger 每秒从 Redis ZSet 取出到期任务：
+
+```go
+// 取出到期任务
+triggers, err := t.redisQueue.PopDueTasks(ctx, int64(t.config.BatchSize))
+```
+
+**Lua 脚本保证原子性**：
+```lua
+local tasks = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2])
+if #tasks > 0 then
+    redis.call('ZREM', KEYS[1], unpack(tasks))
+end
+return tasks
+```
+
+### 2. 检查幂等性
+
+防止同一任务在同一触发时间被重复执行：
+
+```go
+// 检查幂等性
+isIdempotent, err := t.redisQueue.IsIdempotent(ctx, trigger.TaskID, trigger.TriggerTime)
+```
+
+### 3. 获取分布式锁
+
+防止多实例同时执行同一任务：
+
+```go
+// 获取分布式锁
+locked, err := t.redisQueue.AcquireTaskLock(ctx, trigger.TaskID, trigger.TriggerTime, 5*time.Minute)
+```
+
+### 4. 创建执行记录
+
+在数据库中创建执行记录：
+
+```go
+// 创建执行记录
+execution := &model.TaskExecution{
+    TaskID:        task.ID,
+    TriggerTime:   trigger.TriggerTime,
+    Status:        model.ExecutionStatusPENDING,
+    RequestURL:    task.CallbackURL,
+    RequestMethod: task.CallbackMethod,
+    RequestBody:   task.CallbackBody,
+}
+
+if err := t.execRepo.Create(execution); err != nil {
+    // 错误处理
+}
+```
+
+### 5. 提交到执行器
+
+异步提交到执行器执行：
+
+```go
+// 提交到执行器异步执行
+t.executor.Submit(execution, task)
+```
+
+## 配置说明
+
+### Scheduler 配置
+
+```yaml
+scheduler:
+  scan_interval: 5    # 扫描间隔（秒）
+  batch_size: 100     # 每批扫描任务数
+```
+
+### Redis 配置
+
+```yaml
+redis:
+  addr: "127.0.0.1:6379"
+  password: ""
+  db: 0
+  pool_size: 10
+```
+
+## 性能优化
+
+1. **批量处理**：每次扫描批量获取任务，减少数据库查询
+2. **异步执行**：任务执行异步提交，不阻塞触发流程
+3. **工作池控制**：限制并发执行数量，防止资源耗尽
+4. **Redis ZSet**：高效的时间排序和范围查询
