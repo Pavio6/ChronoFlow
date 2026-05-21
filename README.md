@@ -118,65 +118,6 @@ graph TB
     style Callback fill:#e8f5e9
 ```
 
-### 核心调度流程
-
-```mermaid
-sequenceDiagram
-    participant S as Scheduler
-    participant DB as MySQL
-    participant R as Redis ZSet
-    participant T as Trigger
-    participant E as Executor
-    participant CB as 目标服务
-
-    loop 每 5 秒扫描
-        S->>DB: 查询待调度任务
-        S->>S: 计算 next_trigger_time
-        S->>DB: 更新触发时间
-        S->>R: ZADD 写入任务队列
-    end
-
-    loop 每秒轮询
-        T->>R: Lua: ZRANGEBYSCORE + ZREM
-        R-->>T: 返回到期任务
-        T->>T: 幂等检查 (SETNX)
-        T->>T: 获取分布式锁
-        T->>DB: 创建执行记录 (PENDING)
-        T->>E: 提交执行
-    end
-
-    E->>E: 更新状态为 RUNNING
-    E->>CB: HTTP POST 回调
-    CB-->>E: 返回响应
-
-    alt 执行成功
-        E->>DB: 记录 SUCCESS
-    else 执行失败
-        E->>E: 计算重试时间
-        E->>DB: 记录 FAILED + next_retry_time
-    end
-```
-
-### 任务状态机
-
-```mermaid
-stateDiagram-v2
-    [*] --> INIT: 创建任务
-    INIT --> ENABLED: 启用
-    ENABLED --> DISABLED: 禁用
-    DISABLED --> ENABLED: 启用
-    ENABLED --> RUNNING: 触发执行
-    RUNNING --> SUCCESS: 执行成功
-    RUNNING --> FAILED: 执行失败
-    RUNNING --> TIMEOUT: 执行超时
-    SUCCESS --> ENABLED: 重置状态
-    FAILED --> ENABLED: 重置状态
-    FAILED --> RETRYING: 重试
-    RETRYING --> RUNNING: 重新执行
-    ENABLED --> DELETED: 删除
-    DISABLED --> DELETED: 删除
-    DELETED --> [*]
-```
 
 ## 项目结构
 
