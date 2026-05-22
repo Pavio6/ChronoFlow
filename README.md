@@ -1,6 +1,6 @@
 # ChronoFlow - Go 分布式定时任务调度系统
 
-基于 xTimer 架构实现的分布式定时任务调度系统，采用**时间分片 + 分桶并发 + 三级存储**设计，支持 Cron 表达式定时、HTTP 回调、失败重试、幂等去重、分布式锁等能力。
+采用**时间分片 + 分桶并发 + 三级存储**设计的分布式定时任务调度系统，支持 Cron 表达式定时、HTTP 回调、失败重试、幂等去重、分布式锁等能力。
 
 ## 核心特性
 
@@ -34,59 +34,65 @@
 
 ## 系统架构
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    ChronoFlow                            │
-│                                                         │
-│  ┌──────────┐    ┌──────────┐    ┌──────────┐          │
-│  │ Migrator │    │Scheduler │    │  Trigger │          │
-│  │(批量打点)│    │(抢锁+分发)│    │(轮询ZSet)│          │
-│  └────┬─────┘    └────┬─────┘    └────┬─────┘          │
-│       │               │               │                 │
-│       │          [goroutine pool]      │                 │
-│       │               │               │                 │
-│       ▼               ▼               ▼                 │
-│  ┌──────────────────────────────────────────┐           │
-│  │              Executor                     │           │
-│  │  (幂等去重 + HTTP回调 + 更新记录)          │           │
-│  └──────────────────────────────────────────┘           │
-│                                                         │
-│  ┌──────────────────────────────────────────┐           │
-│  │           内存缓存层 (Memory Cache)       │           │
-│  └──────────────────────────────────────────┘           │
-└─────────────────────────────────────────────────────────┘
-         │                │                │
-    ┌────▼────┐     ┌────▼────┐     ┌────▼────┐
-    │  MySQL  │     │  Redis  │     │  Memory │
-    │(持久化) │     │(ZSet队列)│     │(本地缓存)│
-    └─────────┘     └─────────┘     └─────────┘
+```mermaid
+graph TB
+    subgraph ChronoFlow
+        Migrator["Migrator<br/>(批量打点)"]
+        Scheduler["Scheduler<br/>(抢锁+分发)"]
+        Trigger["Trigger<br/>(轮询ZSet)"]
+        Pool["goroutine pool"]
+        Executor["Executor<br/>(幂等去重 + HTTP回调 + 更新记录)"]
+        Cache["内存缓存层 (Memory Cache)"]
+        
+        Migrator --> Pool
+        Scheduler --> Pool
+        Trigger --> Pool
+        Pool --> Executor
+        Executor --> Cache
+    end
+    
+    subgraph 存储层
+        MySQL["MySQL<br/>(持久化)"]
+        Redis["Redis<br/>(ZSet队列)"]
+        Memory["Memory<br/>(本地缓存)"]
+    end
+    
+    Migrator --> MySQL
+    Migrator --> Redis
+    Executor --> MySQL
+    Executor --> Redis
+    Cache --> Memory
 ```
 
 ### 核心流程
 
-```
-定时器创建 → 定义存 MySQL（status=INACTIVE）
-     │
-定时器激活 → Migrator 批量预创建未来 step1 的定时任务
-     │         → 定时任务存 MySQL + Redis ZSet（按分片分桶）
-     │
-每 1s → Scheduler 轮询
-     │   → 计算当前 time_range
-     │   → 遍历每个桶，抢分布式锁
-     │   → 抢到锁 → 从协程池提交 Trigger
-     │
-Trigger → 在时间片内轮询 Redis ZSet {time_range}:{bucket}
-     │    → ZRANGEBYSCORE 取到期任务
-     │    → 从协程池提交 Executor
-     │    → 完成后更新锁 TTL
-     │
-Executor → bloom filter 查重
-     │    → Redis 幂等键检查（bloom 命中时）
-     │    → MySQL 查重（Redis 也命中时）
-     │    → 查定时器定义（先内存，miss 再 MySQL）
-     │    → 执行 HTTP 回调
-     │    → bloom filter 打点 + Redis 幂等键设置
-     │    → 更新 MySQL 记录状态
+```mermaid
+graph TD
+    A["定时器创建"] --> B["定义存 MySQL<br/>(status=INACTIVE)"]
+    B --> C["定时器激活"]
+    C --> D["Migrator 批量预创建未来 step1 的定时任务"]
+    D --> E["定时任务存 MySQL + Redis ZSet<br/>(按分片分桶)"]
+    
+    F["每 1s Scheduler 轮询"] --> G["计算当前 time_range"]
+    G --> H["遍历每个桶，抢分布式锁"]
+    H --> I{"抢到锁?"}
+    I -->|是| J["从协程池提交 Trigger"]
+    
+    J --> K["在时间片内轮询 Redis ZSet<br/>{time_range}:{bucket}"]
+    K --> L["ZRANGEBYSCORE 取到期任务"]
+    L --> M["从协程池提交 Executor"]
+    M --> N["完成后更新锁 TTL"]
+    
+    M --> O["bloom filter 查重"]
+    O --> P{"bloom 命中?"}
+    P -->|是| Q["Redis 幂等键检查"]
+    Q --> R{"Redis 命中?"}
+    R -->|是| S["MySQL 查重"]
+    P -->|否| T["执行 HTTP 回调"]
+    R -->|否| T
+    S --> T
+    T --> U["bloom filter 打点 + Redis 幂等键设置"]
+    U --> V["更新 MySQL 记录状态"]
 ```
 
 ## 项目结构
@@ -370,12 +376,10 @@ INACTIVE ──激活──→ ACTIVE ──停用──→ INACTIVE
 ## 文档
 
 - [系统架构详解](docs/1-architecture.md)
-- [xTimer 原理与实现](docs/2-xtimer-theory.md)
 - [调度器模块详解](docs/3-scheduler.md)
 - [分布式锁与幂等](docs/4-distributed-lock.md)
 - [重试与恢复机制](docs/5-retry-and-recovery.md)
 - [API 接口文档](docs/6-api-reference.md)
-- [xTimer 架构分析](docs/7.xtimer-analysis.md)
 
 ## 许可证
 
