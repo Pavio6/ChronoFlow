@@ -1,17 +1,23 @@
 import apiClient from './client';
 import type {
-  TaskExecution,
-  ExecutionListResponse,
-  ExecutionListParams,
+  TimerRecord,
+  RecordListResponse,
+  RecordListParams,
   ApiResponse,
 } from '../types';
 
 // 获取执行记录列表
-export const getExecutions = async (params?: ExecutionListParams): Promise<ExecutionListResponse> => {
-  return apiClient.get('/executions', { params });
+export const getRecords = async (params?: RecordListParams): Promise<RecordListResponse> => {
+  const res = await apiClient.get<any>('/records', { params });
+  return res.data;
+};
+
+// 获取指定定时器的执行记录
+export const getTimerRecords = async (timerId: number, limit?: number): Promise<ApiResponse<TimerRecord[]>> => {
+  return apiClient.get(`/timers/${timerId}/records`, { params: { limit } });
 };
 
 // 获取执行记录详情
-export const getExecution = async (id: number): Promise<ApiResponse<TaskExecution>> => {
-  return apiClient.get(`/executions/${id}`);
+export const getRecord = async (id: number): Promise<ApiResponse<TimerRecord>> => {
+  return apiClient.get(`/records/${id}`);
 };

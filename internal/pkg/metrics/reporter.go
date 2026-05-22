@@ -2,135 +2,169 @@ package metrics
 
 import (
 	"net/http"
+	"strconv"
+	"sync"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
-// 监控指标名称
+// Prometheus 指标名称常量
 const (
-	TaskExecTotal     = "chronoflow_task_exec_total"
-	TaskExecDuration  = "chronoflow_task_exec_duration_seconds"
-	TaskExecSuccess   = "chronoflow_task_exec_success_total"
-	TaskExecFailed    = "chronoflow_task_exec_failed_total"
-	TaskExecRetry     = "chronoflow_task_exec_retry_total"
-	TaskTriggerTotal  = "chronoflow_task_trigger_total"
-	TaskQueueSize     = "chronoflow_task_queue_size"
+	// TimerExecTotal 定时器执行总次数（含重试）
+	TimerExecTotal = "chronoflow_timer_exec_total"
+	// TimerExecDuration 定时器执行耗时（直方图，毫秒）
+	TimerExecDuration = "chronoflow_timer_exec_duration_ms"
+	// TimerExecSuccess 定时器执行成功次数
+	TimerExecSuccess = "chronoflow_timer_exec_success_total"
+	// TimerExecFailed 定时器执行失败次数
+	TimerExecFailed = "chronoflow_timer_exec_failed_total"
+	// TimerExecRetry 定时器执行重试次数
+	TimerExecRetry = "chronoflow_timer_exec_retry_total"
+	// TimerTriggerTotal 定时器触发总次数
+	TimerTriggerTotal = "chronoflow_timer_trigger_total"
+	// TimerQueueSize 定时器队列当前大小
+	TimerQueueSize = "chronoflow_timer_queue_size"
 )
 
-// 标签
+// 标签常量
 const (
-	LabelTaskID = "task_id"
+	// LabelTimerID 定时器 ID 标签
+	LabelTimerID = "timer_id"
+	// LabelStatus 执行状态标签
 	LabelStatus = "status"
-	LabelApp    = "app"
+	// LabelApp 应用名称标签
+	LabelApp = "app"
 )
 
-// Reporter 监控上报器
+// Reporter Prometheus 指标上报器（单例）
 type Reporter struct {
-	// 任务执行总数
-	taskExecTotal *prometheus.CounterVec
-	// 任务执行延迟
-	taskExecDuration *prometheus.HistogramVec
-	// 任务执行成功总数
-	taskExecSuccess *prometheus.CounterVec
-	// 任务执行失败总数
-	taskExecFailed *prometheus.CounterVec
-	// 任务重试总数
-	taskExecRetry *prometheus.CounterVec
-	// 任务触发总数
-	taskTriggerTotal *prometheus.CounterVec
-	// 任务队列大小
-	taskQueueSize prometheus.GaugeFunc
+	// execTotal 定时器执行总次数
+	execTotal *prometheus.CounterVec
+	// execDuration 定时器执行耗时
+	execDuration *prometheus.HistogramVec
+	// execSuccess 定时器执行成功次数
+	execSuccess *prometheus.CounterVec
+	// execFailed 定时器执行失败次数
+	execFailed *prometheus.CounterVec
+	// execRetry 定时器执行重试次数
+	execRetry *prometheus.CounterVec
+	// triggerTotal 定时器触发总次数
+	triggerTotal *prometheus.CounterVec
+	// queueSize 定时器队列大小
+	queueSize prometheus.GaugeFunc
 }
 
-// NewReporter 创建监控上报器
+var (
+	// 单例实例和初始化保障
+	reporterInstance *Reporter
+	reporterOnce     sync.Once
+)
+
+// NewReporter 创建指标上报器单例
+// 使用 sync.Once 保证只注册一次 Prometheus 指标
 func NewReporter() *Reporter {
-	r := &Reporter{
-		taskExecTotal: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: TaskExecTotal,
-				Help: "Total number of task executions",
-			},
-			[]string{LabelTaskID, LabelStatus},
-		),
+	reporterOnce.Do(func() {
+		reporterInstance = &Reporter{
+			execTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: TimerExecTotal,
+				Help: "定时器执行总次数（含重试）",
+			}, []string{LabelTimerID, LabelApp}),
 
-		taskExecDuration: promauto.NewHistogramVec(
-			prometheus.HistogramOpts{
-				Name:    TaskExecDuration,
-				Help:    "Task execution duration in seconds",
-				Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60},
-			},
-			[]string{LabelTaskID},
-		),
+			execDuration: promauto.NewHistogramVec(prometheus.HistogramOpts{
+				Name:    TimerExecDuration,
+				Help:    "定时器执行耗时（毫秒）",
+				Buckets: []float64{10, 50, 100, 250, 500, 1000, 2500, 5000, 10000},
+			}, []string{LabelTimerID, LabelApp}),
 
-		taskExecSuccess: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: TaskExecSuccess,
-				Help: "Total number of successful task executions",
-			},
-			[]string{LabelTaskID},
-		),
+			execSuccess: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: TimerExecSuccess,
+				Help: "定时器执行成功次数",
+			}, []string{LabelTimerID, LabelApp}),
 
-		taskExecFailed: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: TaskExecFailed,
-				Help: "Total number of failed task executions",
-			},
-			[]string{LabelTaskID},
-		),
+			execFailed: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: TimerExecFailed,
+				Help: "定时器执行失败次数",
+			}, []string{LabelTimerID, LabelApp, LabelStatus}),
 
-		taskExecRetry: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: TaskExecRetry,
-				Help: "Total number of task retries",
-			},
-			[]string{LabelTaskID},
-		),
+			execRetry: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: TimerExecRetry,
+				Help: "定时器执行重试次数",
+			}, []string{LabelTimerID, LabelApp}),
 
-		taskTriggerTotal: promauto.NewCounterVec(
-			prometheus.CounterOpts{
-				Name: TaskTriggerTotal,
-				Help: "Total number of task triggers",
-			},
-			[]string{LabelTaskID},
-		),
-	}
+			triggerTotal: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: TimerTriggerTotal,
+				Help: "定时器触发总次数",
+			}, []string{LabelApp}),
 
-	return r
+			queueSize: promauto.NewGaugeFunc(prometheus.GaugeOpts{
+				Name: TimerQueueSize,
+				Help: "定时器队列当前大小",
+			}, func() float64 {
+				// 默认返回 0，由外部注入实际值
+				return 0
+			}),
+		}
+	})
+
+	return reporterInstance
 }
 
-// ReportExecRecord 上报任务执行记录
-func (r *Reporter) ReportExecRecord(taskID string, status string) {
-	r.taskExecTotal.WithLabelValues(taskID, status).Inc()
+// ReportExecRecord 上报定时器执行记录
+func (r *Reporter) ReportExecRecord(timerID int64, app string) {
+	r.execTotal.With(prometheus.Labels{
+		LabelTimerID: formatID(timerID),
+		LabelApp:     app,
+	}).Inc()
 }
 
-// ReportExecDuration 上报任务执行延迟
-func (r *Reporter) ReportExecDuration(taskID string, durationSeconds float64) {
-	r.taskExecDuration.WithLabelValues(taskID).Observe(durationSeconds)
+// ReportExecDuration 上报定时器执行耗时
+func (r *Reporter) ReportExecDuration(timerID int64, app string, durationMs float64) {
+	r.execDuration.With(prometheus.Labels{
+		LabelTimerID: formatID(timerID),
+		LabelApp:     app,
+	}).Observe(durationMs)
 }
 
-// ReportExecSuccess 上报任务执行成功
-func (r *Reporter) ReportExecSuccess(taskID string) {
-	r.taskExecSuccess.WithLabelValues(taskID).Inc()
+// ReportExecSuccess 上报定时器执行成功
+func (r *Reporter) ReportExecSuccess(timerID int64, app string) {
+	r.execSuccess.With(prometheus.Labels{
+		LabelTimerID: formatID(timerID),
+		LabelApp:     app,
+	}).Inc()
 }
 
-// ReportExecFailed 上报任务执行失败
-func (r *Reporter) ReportExecFailed(taskID string) {
-	r.taskExecFailed.WithLabelValues(taskID).Inc()
+// ReportExecFailed 上报定时器执行失败
+func (r *Reporter) ReportExecFailed(timerID int64, app, status string) {
+	r.execFailed.With(prometheus.Labels{
+		LabelTimerID: formatID(timerID),
+		LabelApp:     app,
+		LabelStatus:  status,
+	}).Inc()
 }
 
-// ReportExecRetry 上报任务重试
-func (r *Reporter) ReportExecRetry(taskID string) {
-	r.taskExecRetry.WithLabelValues(taskID).Inc()
+// ReportExecRetry 上报定时器执行重试
+func (r *Reporter) ReportExecRetry(timerID int64, app string) {
+	r.execRetry.With(prometheus.Labels{
+		LabelTimerID: formatID(timerID),
+		LabelApp:     app,
+	}).Inc()
 }
 
-// ReportTrigger 上报任务触发
-func (r *Reporter) ReportTrigger(taskID string) {
-	r.taskTriggerTotal.WithLabelValues(taskID).Inc()
+// ReportTrigger 上报定时器触发
+func (r *Reporter) ReportTrigger(app string) {
+	r.triggerTotal.With(prometheus.Labels{
+		LabelApp: app,
+	}).Inc()
 }
 
-// GetHandler 获取 Prometheus HTTP handler
-func GetHandler() http.Handler {
+// GetHandler 返回 Prometheus HTTP 指标暴露 handler
+func (r *Reporter) GetHandler() http.Handler {
 	return promhttp.Handler()
+}
+
+// formatID 将 int64 ID 格式化为字符串
+func formatID(id int64) string {
+	return strconv.FormatInt(id, 10)
 }

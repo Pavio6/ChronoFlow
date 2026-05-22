@@ -2,12 +2,11 @@ package config
 
 import (
 	"fmt"
-	"time"
 
 	"github.com/spf13/viper"
 )
 
-// Config 应用配置结构体
+// Config 应用全局配置
 type Config struct {
 	Server    ServerConfig    `mapstructure:"server"`
 	Database  DatabaseConfig  `mapstructure:"database"`
@@ -18,19 +17,19 @@ type Config struct {
 	Log       LogConfig       `mapstructure:"log"`
 }
 
-// ServerConfig 服务器配置
+// ServerConfig HTTP 服务器配置
 type ServerConfig struct {
 	Port int    `mapstructure:"port"`
-	Mode string `mapstructure:"mode"` // debug | release | test
+	Mode string `mapstructure:"mode"` // debug, release, test
 }
 
 // DatabaseConfig 数据库配置
 type DatabaseConfig struct {
-	Driver          string `mapstructure:"driver"` // mysql | postgres
+	Driver          string `mapstructure:"driver"`
 	DSN             string `mapstructure:"dsn"`
 	MaxOpenConns    int    `mapstructure:"max_open_conns"`
 	MaxIdleConns    int    `mapstructure:"max_idle_conns"`
-	ConnMaxLifetime int    `mapstructure:"conn_max_lifetime"` // 秒
+	ConnMaxLifetime int    `mapstructure:"conn_max_lifetime"` // 分钟
 }
 
 // RedisConfig Redis 配置
@@ -42,48 +41,48 @@ type RedisConfig struct {
 }
 
 // SchedulerConfig 调度器配置
+// step1_duration: 一级时间步（秒），Migrator 批量预创建的时间范围
+// step2_duration: 二级时间步（秒），内存缓存刷新间隔
+// bucket_num: 分桶数量
+// scan_interval: Scheduler 轮询间隔（秒）
 type SchedulerConfig struct {
-	ScanInterval int `mapstructure:"scan_interval"` // 扫描间隔（秒）
-	BatchSize    int `mapstructure:"batch_size"`    // 每批扫描任务数
+	Step1Duration int `mapstructure:"step1_duration"`
+	Step2Duration int `mapstructure:"step2_duration"`
+	BucketNum     int `mapstructure:"bucket_num"`
+	ScanInterval  int `mapstructure:"scan_interval"`
 }
 
 // ExecutorConfig 执行器配置
 type ExecutorConfig struct {
-	Timeout        int `mapstructure:"timeout"`          // HTTP 回调超时时间（秒）
+	Timeout        int `mapstructure:"timeout"`          // HTTP 回调超时（秒）
 	MaxRetries     int `mapstructure:"max_retries"`      // 最大重试次数
-	WorkerPoolSize int `mapstructure:"worker_pool_size"` // 工作池大小
+	WorkerPoolSize int `mapstructure:"worker_pool_size"` // 协程池大小
 }
 
 // RetryConfig 重试策略配置
 type RetryConfig struct {
-	Strategy       string  `mapstructure:"strategy"`        // exponential | fixed
-	InitialInterval int    `mapstructure:"initial_interval"` // 初始重试间隔（秒）
-	MaxInterval     int    `mapstructure:"max_interval"`     // 最大重试间隔（秒）
-	Multiplier      float64 `mapstructure:"multiplier"`      // 指数退避倍数
+	Strategy        string  `mapstructure:"strategy"`         // exponential, fixed
+	InitialInterval int     `mapstructure:"initial_interval"` // 初始间隔（秒）
+	MaxInterval     int     `mapstructure:"max_interval"`     // 最大间隔（秒）
+	Multiplier      float64 `mapstructure:"multiplier"`       // 乘数
 }
 
 // LogConfig 日志配置
 type LogConfig struct {
-	Level    string `mapstructure:"level"`     // debug | info | warn | error
-	Format   string `mapstructure:"format"`    // json | console
-	Output   string `mapstructure:"output"`    // stdout | file
-	FilePath string `mapstructure:"file_path"` // 日志文件路径
+	Level    string `mapstructure:"level"`
+	Format   string `mapstructure:"format"`    // json, console
+	Output   string `mapstructure:"output"`    // stdout, file
+	FilePath string `mapstructure:"file_path"` // 文件输出路径
 }
 
 // AppConfig 全局配置实例
 var AppConfig *Config
 
 // Load 加载配置文件
-// configPath: 配置文件路径（不包含扩展名）
 func Load(configPath string) (*Config, error) {
 	viper.SetConfigName("config")
 	viper.SetConfigType("yaml")
-
-	if configPath != "" {
-		viper.AddConfigPath(configPath)
-	}
-	viper.AddConfigPath("./config")
-	viper.AddConfigPath(".")
+	viper.AddConfigPath(configPath)
 
 	// 设置默认值
 	setDefaults()
@@ -91,20 +90,19 @@ func Load(configPath string) (*Config, error) {
 	// 读取环境变量
 	viper.AutomaticEnv()
 
-	// 读取配置文件
 	if err := viper.ReadInConfig(); err != nil {
 		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
 			return nil, fmt.Errorf("failed to read config: %w", err)
 		}
 	}
 
-	var config Config
-	if err := viper.Unmarshal(&config); err != nil {
+	cfg := &Config{}
+	if err := viper.Unmarshal(cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 
-	AppConfig = &config
-	return &config, nil
+	AppConfig = cfg
+	return cfg, nil
 }
 
 // setDefaults 设置配置默认值
@@ -117,23 +115,26 @@ func setDefaults() {
 	viper.SetDefault("database.driver", "mysql")
 	viper.SetDefault("database.max_open_conns", 100)
 	viper.SetDefault("database.max_idle_conns", 10)
-	viper.SetDefault("database.conn_max_lifetime", 3600)
+	viper.SetDefault("database.conn_max_lifetime", 60)
 
 	// Redis 默认配置
 	viper.SetDefault("redis.addr", "127.0.0.1:6379")
+	viper.SetDefault("redis.password", "")
 	viper.SetDefault("redis.db", 0)
-	viper.SetDefault("redis.pool_size", 10)
+	viper.SetDefault("redis.pool_size", 100)
 
 	// 调度器默认配置
-	viper.SetDefault("scheduler.scan_interval", 5)
-	viper.SetDefault("scheduler.batch_size", 100)
+	viper.SetDefault("scheduler.step1_duration", 3600) // 60 分钟
+	viper.SetDefault("scheduler.step2_duration", 300)  // 5 分钟
+	viper.SetDefault("scheduler.bucket_num", 3)
+	viper.SetDefault("scheduler.scan_interval", 1) // 1 秒
 
 	// 执行器默认配置
 	viper.SetDefault("executor.timeout", 30)
 	viper.SetDefault("executor.max_retries", 3)
-	viper.SetDefault("executor.worker_pool_size", 10)
+	viper.SetDefault("executor.worker_pool_size", 100)
 
-	// 重试默认配置
+	// 重试策略默认配置
 	viper.SetDefault("retry.strategy", "exponential")
 	viper.SetDefault("retry.initial_interval", 10)
 	viper.SetDefault("retry.max_interval", 60)
@@ -143,29 +144,4 @@ func setDefaults() {
 	viper.SetDefault("log.level", "info")
 	viper.SetDefault("log.format", "json")
 	viper.SetDefault("log.output", "stdout")
-}
-
-// GetServerAddr 获取服务器监听地址
-func GetServerAddr() string {
-	return fmt.Sprintf(":%d", AppConfig.Server.Port)
-}
-
-// GetDatabaseDSN 获取数据库连接字符串
-func GetDatabaseDSN() string {
-	return AppConfig.Database.DSN
-}
-
-// GetRedisAddr 获取 Redis 地址
-func GetRedisAddr() string {
-	return AppConfig.Redis.Addr
-}
-
-// GetScanInterval 获取扫描间隔
-func GetScanInterval() time.Duration {
-	return time.Duration(AppConfig.Scheduler.ScanInterval) * time.Second
-}
-
-// GetExecutorTimeout 获取执行器超时时间
-func GetExecutorTimeout() time.Duration {
-	return time.Duration(AppConfig.Executor.Timeout) * time.Second
 }

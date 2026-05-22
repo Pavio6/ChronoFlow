@@ -1,39 +1,53 @@
 # ChronoFlow 配置文件
+# 基于 xTimer 架构的分布式定时任务调度系统
 
 server:
   port: 8080
-  mode: debug  # debug | release | test
+  mode: debug  # debug, release, test
 
 database:
   driver: mysql
   dsn: "root:123456@tcp(127.0.0.1:3306)/chronoflow?charset=utf8mb4&parseTime=True&loc=Local"
   max_open_conns: 100
   max_idle_conns: 10
-  conn_max_lifetime: 3600  # 秒
+  conn_max_lifetime: 60  # 分钟
 
 redis:
   addr: "127.0.0.1:6379"
   password: ""
   db: 0
-  pool_size: 10
+  pool_size: 100
 
 scheduler:
-  scan_interval: 5  # 扫描间隔（秒）
-  batch_size: 100   # 每批扫描任务数
+  # 一级时间步（秒），Migrator 批量预创建的时间范围，默认 60 分钟
+  step1_duration: 3600
+  # 二级时间步（秒），内存缓存刷新间隔，默认 5 分钟
+  step2_duration: 300
+  # 分桶数量（支持动态调整）
+  bucket_num: 3
+  # Scheduler 轮询间隔（秒）
+  scan_interval: 1
 
 executor:
-  timeout: 30       # HTTP 回调超时时间（秒）
-  max_retries: 3    # 最大重试次数
-  worker_pool_size: 10  # 工作池大小
+  # HTTP 回调超时（秒）
+  timeout: 30
+  # 最大重试次数
+  max_retries: 3
+  # 协程池大小
+  worker_pool_size: 100
 
 retry:
-  strategy: exponential  # exponential | fixed
-  initial_interval: 10   # 初始重试间隔（秒）
-  max_interval: 60       # 最大重试间隔（秒）
-  multiplier: 3.0        # 指数退避倍数
+  # 重试策略: exponential（指数退避）, fixed（固定间隔）
+  strategy: exponential
+  # 初始重试间隔（秒）
+  initial_interval: 10
+  # 最大重试间隔（秒）
+  max_interval: 60
+  # 退避倍数
+  multiplier: 3.0
 
 log:
-  level: info  # debug | info | warn | error
-  format: json  # json | console
-  output: stdout  # stdout | file
-  file_path: ./logs/chronoflow.log
+  level: info
+  format: json    # json, console
+  output: stdout  # stdout, file
+  file_path: ""

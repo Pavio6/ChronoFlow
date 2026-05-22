@@ -13,9 +13,9 @@ import {
 } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import type { CreateTaskRequest, UpdateTaskRequest } from '../types';
-import { createTask, getTask, updateTask } from '../api/tasks';
-import { HTTP_METHODS, CRON_PRESETS } from '../utils/constants';
+import type { CreateTimerRequest, UpdateTimerRequest } from '../types';
+import { createTimer, getTimer, updateTimer } from '../api/tasks';
+import { HTTP_METHODS, CRON_PRESETS, APP_PRESETS } from '../utils/constants';
 
 const { TextArea } = Input;
 
@@ -27,39 +27,39 @@ const TaskForm: React.FC = () => {
   const [fetchLoading, setFetchLoading] = useState(false);
   const isEdit = !!id;
 
-  // 如果是编辑模式，加载任务数据
+  // 如果是编辑模式，加载定时器数据
   useEffect(() => {
     if (isEdit) {
-      loadTask();
+      loadTimer();
     }
   }, [id]);
 
-  const loadTask = async () => {
+  const loadTimer = async () => {
     setFetchLoading(true);
     try {
-      const res = await getTask(Number(id));
+      const res = await getTimer(Number(id));
       if (res.data) {
-        const task = res.data;
+        const timer = res.data;
         // 解析 callback_headers
         let headers = {};
         try {
-          headers = JSON.parse(task.callback_headers || '{}');
+          headers = JSON.parse(timer.callback_headers || '{}');
         } catch {}
 
         form.setFieldsValue({
-          name: task.name,
-          description: task.description,
-          cron_expr: task.cron_expr,
-          callback_url: task.callback_url,
-          callback_method: task.callback_method,
-          callback_body: task.callback_body,
+          app: timer.app,
+          name: timer.name,
+          cron_expr: timer.cron_expr,
+          callback_url: timer.callback_url,
+          callback_method: timer.callback_method,
+          callback_body: timer.callback_body,
           callback_headers: JSON.stringify(headers, null, 2),
-          timeout: task.timeout,
-          max_retries: task.max_retries,
+          timeout: timer.timeout,
+          max_retries: timer.max_retries,
         });
       }
     } catch (error: any) {
-      message.error(error.message || '加载任务失败');
+      message.error(error.message || '加载定时器失败');
       navigate('/tasks');
     } finally {
       setFetchLoading(false);
@@ -88,10 +88,10 @@ const TaskForm: React.FC = () => {
       };
 
       if (isEdit) {
-        await updateTask(Number(id), data as UpdateTaskRequest);
+        await updateTimer(Number(id), data as UpdateTimerRequest);
         message.success('更新成功');
       } else {
-        await createTask(data as CreateTaskRequest);
+        await createTimer(data as CreateTimerRequest);
         message.success('创建成功');
       }
       navigate('/tasks');
@@ -110,11 +110,11 @@ const TaskForm: React.FC = () => {
         onClick={() => navigate('/tasks')}
         style={{ marginBottom: 16, padding: 0 }}
       >
-        返回任务列表
+        返回定时器列表
       </Button>
 
       <Card
-        title={isEdit ? '编辑任务' : '创建任务'}
+        title={isEdit ? '编辑定时器' : '创建定时器'}
         loading={fetchLoading}
       >
         <Form
@@ -122,24 +122,30 @@ const TaskForm: React.FC = () => {
           layout="vertical"
           onFinish={handleSubmit}
           initialValues={{
+            app: 'default',
             callback_method: 'POST',
             timeout: 30,
             max_retries: 3,
           }}
         >
           <Form.Item
-            name="name"
-            label="任务名称"
-            rules={[{ required: true, message: '请输入任务名称' }]}
+            name="app"
+            label="应用名"
+            rules={[{ required: true, message: '请输入应用名' }]}
           >
-            <Input placeholder="请输入任务名称" maxLength={128} />
+            <Select
+              placeholder="请选择或输入应用名"
+              showSearch
+              options={APP_PRESETS.map(app => ({ label: app, value: app }))}
+            />
           </Form.Item>
 
           <Form.Item
-            name="description"
-            label="任务描述"
+            name="name"
+            label="定时器名称"
+            rules={[{ required: true, message: '请输入定时器名称' }]}
           >
-            <TextArea placeholder="请输入任务描述" rows={2} maxLength={512} />
+            <Input placeholder="请输入定时器名称" maxLength={128} />
           </Form.Item>
 
           <Form.Item

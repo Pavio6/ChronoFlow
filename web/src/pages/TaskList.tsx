@@ -19,23 +19,22 @@ import {
   SearchOutlined,
   PlayCircleOutlined,
   PauseCircleOutlined,
-  ThunderboltOutlined,
   EditOutlined,
   DeleteOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
 import type { ColumnsType } from 'antd/es/table';
-import type { Task, TaskStatus, TaskListParams } from '../types';
-import { getTasks, deleteTask, enableTask, disableTask, triggerTask } from '../api/tasks';
-import { TASK_STATUS_CONFIG } from '../utils/constants';
+import type { TimerDefinition, TimerStatus, TimerListParams } from '../types';
+import { getTimers, deleteTimer, activateTimer, deactivateTimer } from '../api/tasks';
+import { TIMER_STATUS_CONFIG } from '../utils/constants';
 
 const TaskList: React.FC = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(false);
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const [timers, setTimers] = useState<TimerDefinition[]>([]);
   const [total, setTotal] = useState(0);
-  const [params, setParams] = useState<TaskListParams>({
+  const [params, setParams] = useState<TimerListParams>({
     page: 1,
     page_size: 10,
   });
@@ -43,26 +42,24 @@ const TaskList: React.FC = () => {
   // 统计数据
   const [stats, setStats] = useState({
     total: 0,
-    enabled: 0,
-    running: 0,
-    failed: 0,
+    active: 0,
+    inactive: 0,
   });
 
-  // 加载任务列表
-  const loadTasks = async () => {
+  // 加载定时器列表
+  const loadTimers = async () => {
     setLoading(true);
     try {
-      const res = await getTasks(params);
-      setTasks(res.tasks || []);
+      const res = await getTimers(params);
+      setTimers(res.items || []);
       setTotal(res.total);
-      
+
       // 计算统计数据
-      const allTasks = res.tasks || [];
+      const allTimers = res.items || [];
       setStats({
         total: res.total,
-        enabled: allTasks.filter(t => t.status === 'ENABLED').length,
-        running: allTasks.filter(t => t.status === 'RUNNING').length,
-        failed: allTasks.filter(t => t.status === 'FAILED').length,
+        active: allTimers.filter(t => t.status === 'ACTIVE').length,
+        inactive: allTimers.filter(t => t.status === 'INACTIVE').length,
       });
     } catch (error: any) {
       message.error(error.message || '加载失败');
@@ -72,62 +69,56 @@ const TaskList: React.FC = () => {
   };
 
   useEffect(() => {
-    loadTasks();
+    loadTimers();
   }, [params]);
 
-  // 删除任务
+  // 删除定时器
   const handleDelete = async (id: number) => {
     try {
-      await deleteTask(id);
+      await deleteTimer(id);
       message.success('删除成功');
-      loadTasks();
+      loadTimers();
     } catch (error: any) {
       message.error(error.message || '删除失败');
     }
   };
 
-  // 启用任务
-  const handleEnable = async (id: number) => {
+  // 激活定时器
+  const handleActivate = async (id: number) => {
     try {
-      await enableTask(id);
-      message.success('启用成功');
-      loadTasks();
+      await activateTimer(id);
+      message.success('激活成功');
+      loadTimers();
     } catch (error: any) {
-      message.error(error.message || '启用失败');
+      message.error(error.message || '激活失败');
     }
   };
 
-  // 禁用任务
-  const handleDisable = async (id: number) => {
+  // 停用定时器
+  const handleDeactivate = async (id: number) => {
     try {
-      await disableTask(id);
-      message.success('禁用成功');
-      loadTasks();
+      await deactivateTimer(id);
+      message.success('停用成功');
+      loadTimers();
     } catch (error: any) {
-      message.error(error.message || '禁用失败');
-    }
-  };
-
-  // 手动触发
-  const handleTrigger = async (id: number) => {
-    try {
-      await triggerTask(id);
-      message.success('触发成功');
-      loadTasks();
-    } catch (error: any) {
-      message.error(error.message || '触发失败');
+      message.error(error.message || '停用失败');
     }
   };
 
   // 表格列定义
-  const columns: ColumnsType<Task> = [
+  const columns: ColumnsType<TimerDefinition> = [
     {
       title: 'ID',
       dataIndex: 'id',
       width: 60,
     },
     {
-      title: '任务名称',
+      title: '应用',
+      dataIndex: 'app',
+      width: 120,
+    },
+    {
+      title: '定时器名称',
       dataIndex: 'name',
       width: 150,
       ellipsis: true,
@@ -152,18 +143,9 @@ const TaskList: React.FC = () => {
       title: '状态',
       dataIndex: 'status',
       width: 100,
-      render: (status: TaskStatus) => {
-        const config = TASK_STATUS_CONFIG[status];
+      render: (status: TimerStatus) => {
+        const config = TIMER_STATUS_CONFIG[status];
         return <Tag color={config?.color}>{config?.label || status}</Tag>;
-      },
-    },
-    {
-      title: '下次触发',
-      dataIndex: 'next_trigger_time',
-      width: 180,
-      render: (time: string | null) => {
-        if (!time) return '-';
-        return new Date(time).toLocaleString('zh-CN');
       },
     },
     {
@@ -182,34 +164,25 @@ const TaskList: React.FC = () => {
       width: 200,
       render: (_, record) => (
         <Space size="small">
-          {record.status === 'ENABLED' ? (
-            <Tooltip title="禁用">
+          {record.status === 'ACTIVE' ? (
+            <Tooltip title="停用">
               <Button
                 type="link"
                 size="small"
                 icon={<PauseCircleOutlined />}
-                onClick={() => handleDisable(record.id)}
+                onClick={() => handleDeactivate(record.id)}
               />
             </Tooltip>
-          ) : record.status === 'DISABLED' || record.status === 'INIT' ? (
-            <Tooltip title="启用">
+          ) : record.status === 'INACTIVE' ? (
+            <Tooltip title="激活">
               <Button
                 type="link"
                 size="small"
                 icon={<PlayCircleOutlined />}
-                onClick={() => handleEnable(record.id)}
+                onClick={() => handleActivate(record.id)}
               />
             </Tooltip>
           ) : null}
-          <Tooltip title="手动触发">
-            <Button
-              type="link"
-              size="small"
-              icon={<ThunderboltOutlined />}
-              onClick={() => handleTrigger(record.id)}
-              disabled={record.status !== 'ENABLED'}
-            />
-          </Tooltip>
           <Tooltip title="编辑">
             <Button
               type="link"
@@ -219,7 +192,7 @@ const TaskList: React.FC = () => {
             />
           </Tooltip>
           <Popconfirm
-            title="确定删除此任务？"
+            title="确定删除此定时器？"
             onConfirm={() => handleDelete(record.id)}
             okText="确定"
             cancelText="取消"
@@ -242,24 +215,19 @@ const TaskList: React.FC = () => {
     <div>
       {/* 统计卡片 */}
       <Row gutter={16} style={{ marginBottom: 16 }}>
-        <Col span={6}>
+        <Col span={8}>
           <Card size="small">
-            <Statistic title="总任务数" value={stats.total} />
+            <Statistic title="总定时器" value={stats.total} />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col span={8}>
           <Card size="small">
-            <Statistic title="已启用" value={stats.enabled} valueStyle={{ color: '#52c41a' }} />
+            <Statistic title="已激活" value={stats.active} valueStyle={{ color: '#52c41a' }} />
           </Card>
         </Col>
-        <Col span={6}>
+        <Col span={8}>
           <Card size="small">
-            <Statistic title="运行中" value={stats.running} valueStyle={{ color: '#1890ff' }} />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card size="small">
-            <Statistic title="失败" value={stats.failed} valueStyle={{ color: '#ff4d4f' }} />
+            <Statistic title="未激活" value={stats.inactive} valueStyle={{ color: '#faad14' }} />
           </Card>
         </Col>
       </Row>
@@ -268,7 +236,7 @@ const TaskList: React.FC = () => {
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
         <Space>
           <Input
-            placeholder="搜索任务名称"
+            placeholder="搜索定时器名称"
             prefix={<SearchOutlined />}
             style={{ width: 200 }}
             onChange={(e) => setParams({ ...params, keyword: e.target.value, page: 1 })}
@@ -279,7 +247,7 @@ const TaskList: React.FC = () => {
             style={{ width: 120 }}
             allowClear
             onChange={(value) => setParams({ ...params, status: value, page: 1 })}
-            options={Object.entries(TASK_STATUS_CONFIG).map(([key, config]) => ({
+            options={Object.entries(TIMER_STATUS_CONFIG).map(([key, config]) => ({
               label: config.label,
               value: key,
             }))}
@@ -288,7 +256,7 @@ const TaskList: React.FC = () => {
         <Space>
           <Button
             icon={<ReloadOutlined />}
-            onClick={loadTasks}
+            onClick={loadTimers}
           >
             刷新
           </Button>
@@ -297,15 +265,15 @@ const TaskList: React.FC = () => {
             icon={<PlusOutlined />}
             onClick={() => navigate('/tasks/create')}
           >
-            创建任务
+            创建定时器
           </Button>
         </Space>
       </div>
 
-      {/* 任务表格 */}
+      {/* 定时器表格 */}
       <Table
         columns={columns}
-        dataSource={tasks}
+        dataSource={timers}
         rowKey="id"
         loading={loading}
         pagination={{

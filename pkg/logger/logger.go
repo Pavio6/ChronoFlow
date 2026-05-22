@@ -8,22 +8,19 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// Logger 全局日志实例
-var Logger *zap.Logger
+// 全局日志实例
+var log *zap.Logger
 
-// Init 初始化日志系统
-// level: 日志级别 (debug, info, warn, error)
-// format: 日志格式 (json, console)
-// output: 输出目标 (stdout, file)
-// filePath: 日志文件路径（当 output=file 时生效）
+// Init 初始化日志
+// level: debug, info, warn, error
+// format: json, console
+// output: stdout, file
 func Init(level, format, output, filePath string) {
 	// 解析日志级别
 	var zapLevel zapcore.Level
 	switch level {
 	case "debug":
 		zapLevel = zapcore.DebugLevel
-	case "info":
-		zapLevel = zapcore.InfoLevel
 	case "warn":
 		zapLevel = zapcore.WarnLevel
 	case "error":
@@ -33,21 +30,12 @@ func Init(level, format, output, filePath string) {
 	}
 
 	// 配置编码器
-	encoderConfig := zapcore.EncoderConfig{
-		TimeKey:        "timestamp",
-		LevelKey:       "level",
-		NameKey:        "logger",
-		CallerKey:      "caller",
-		MessageKey:     "message",
-		StacktraceKey:  "stacktrace",
-		LineEnding:     zapcore.DefaultLineEnding,
-		EncodeLevel:    zapcore.LowercaseLevelEncoder,
-		EncodeTime:     zapcore.TimeEncoderOfLayout(time.RFC3339),
-		EncodeDuration: zapcore.SecondsDurationEncoder,
-		EncodeCaller:   zapcore.ShortCallerEncoder,
-	}
+	encoderConfig := zap.NewProductionConfig().EncoderConfig
+	encoderConfig.TimeKey = "timestamp"
+	encoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+	encoderConfig.EncodeLevel = zapcore.CapitalLevelEncoder
 
-	// 选择编码器
+	// 选择编码格式
 	var encoder zapcore.Encoder
 	if format == "console" {
 		encoder = zapcore.NewConsoleEncoder(encoderConfig)
@@ -55,13 +43,11 @@ func Init(level, format, output, filePath string) {
 		encoder = zapcore.NewJSONEncoder(encoderConfig)
 	}
 
-	// 配置输出
+	// 选择输出目标
 	var writeSyncer zapcore.WriteSyncer
 	if output == "file" && filePath != "" {
-		// 打开日志文件（追加模式）
 		file, err := os.OpenFile(filePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 		if err != nil {
-			// 如果打开文件失败，回退到标准输出
 			writeSyncer = zapcore.AddSync(os.Stdout)
 		} else {
 			writeSyncer = zapcore.AddSync(file)
@@ -72,44 +58,72 @@ func Init(level, format, output, filePath string) {
 
 	// 创建核心
 	core := zapcore.NewCore(encoder, writeSyncer, zapLevel)
-
-	// 创建 Logger
-	Logger = zap.New(core,
-		zap.AddCaller(),
-		zap.AddCallerSkip(0),
-		zap.AddStacktrace(zapcore.ErrorLevel),
-	)
+	log = zap.New(core, zap.AddCaller(), zap.AddCallerSkip(0))
 }
 
 // Sync 刷新日志缓冲区
-func Sync() error {
-	if Logger != nil {
-		return Logger.Sync()
+func Sync() {
+	if log != nil {
+		log.Sync()
 	}
-	return nil
 }
 
-// Debug 记录调试级别日志
-func Debug(msg string, fields ...zap.Field) {
-	Logger.Debug(msg, fields...)
-}
-
-// Info 记录信息级别日志
+// Info 信息日志
 func Info(msg string, fields ...zap.Field) {
-	Logger.Info(msg, fields...)
+	log.Info(msg, fields...)
 }
 
-// Warn 记录警告级别日志
-func Warn(msg string, fields ...zap.Field) {
-	Logger.Warn(msg, fields...)
-}
-
-// Error 记录错误级别日志
+// Error 错误日志
 func Error(msg string, fields ...zap.Field) {
-	Logger.Error(msg, fields...)
+	log.Error(msg, fields...)
 }
 
-// Fatal 记录致命错误日志并退出
+// Warn 警告日志
+func Warn(msg string, fields ...zap.Field) {
+	log.Warn(msg, fields...)
+}
+
+// Debug 调试日志
+func Debug(msg string, fields ...zap.Field) {
+	log.Debug(msg, fields...)
+}
+
+// Fatal 致命错误日志
 func Fatal(msg string, fields ...zap.Field) {
-	Logger.Fatal(msg, fields...)
+	log.Fatal(msg, fields...)
+}
+
+// String 构建字符串类型的日志字段
+func String(key, val string) zap.Field {
+	return zap.String(key, val)
+}
+
+// Int 构建整数类型的日志字段
+func Int(key string, val int) zap.Field {
+	return zap.Int(key, val)
+}
+
+// Int64 构建 64 位整数类型的日志字段
+func Int64(key string, val int64) zap.Field {
+	return zap.Int64(key, val)
+}
+
+// Float64 构建浮点数类型的日志字段
+func Float64(key string, val float64) zap.Field {
+	return zap.Float64(key, val)
+}
+
+// Duration 构建时间间隔类型的日志字段
+func Duration(key string, val time.Duration) zap.Field {
+	return zap.Duration(key, val)
+}
+
+// Any 构建任意类型的日志字段
+func Any(key string, val interface{}) zap.Field {
+	return zap.Any(key, val)
+}
+
+// Bool 构建布尔类型的日志字段
+func Bool(key string, val bool) zap.Field {
+	return zap.Bool(key, val)
 }

@@ -12,27 +12,27 @@ import {
 } from 'antd';
 import { ReloadOutlined, EyeOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
-import type { TaskExecution, ExecutionStatus, ExecutionListParams } from '../types';
-import { getExecutions } from '../api/executions';
-import { EXECUTION_STATUS_CONFIG } from '../utils/constants';
+import type { TimerRecord, RecordStatus, RecordListParams } from '../types';
+import { getRecords } from '../api/executions';
+import { RECORD_STATUS_CONFIG } from '../utils/constants';
 
 const ExecutionList: React.FC = () => {
   const [loading, setLoading] = useState(false);
-  const [executions, setExecutions] = useState<TaskExecution[]>([]);
+  const [records, setRecords] = useState<TimerRecord[]>([]);
   const [total, setTotal] = useState(0);
-  const [params, setParams] = useState<ExecutionListParams>({
+  const [params, setParams] = useState<RecordListParams>({
     page: 1,
     page_size: 10,
   });
   const [detailVisible, setDetailVisible] = useState(false);
-  const [selectedExecution, setSelectedExecution] = useState<TaskExecution | null>(null);
+  const [selectedRecord, setSelectedRecord] = useState<TimerRecord | null>(null);
 
   // 加载执行记录列表
-  const loadExecutions = async () => {
+  const loadRecords = async () => {
     setLoading(true);
     try {
-      const res = await getExecutions(params);
-      setExecutions(res.executions || []);
+      const res = await getRecords(params);
+      setRecords(res.items || []);
       setTotal(res.total);
     } catch (error: any) {
       message.error(error.message || '加载失败');
@@ -42,25 +42,25 @@ const ExecutionList: React.FC = () => {
   };
 
   useEffect(() => {
-    loadExecutions();
+    loadRecords();
   }, [params]);
 
   // 查看详情
-  const handleViewDetail = (record: TaskExecution) => {
-    setSelectedExecution(record);
+  const handleViewDetail = (record: TimerRecord) => {
+    setSelectedRecord(record);
     setDetailVisible(true);
   };
 
   // 表格列定义
-  const columns: ColumnsType<TaskExecution> = [
+  const columns: ColumnsType<TimerRecord> = [
     {
       title: 'ID',
       dataIndex: 'id',
       width: 60,
     },
     {
-      title: '任务ID',
-      dataIndex: 'task_id',
+      title: '定时器ID',
+      dataIndex: 'timer_id',
       width: 80,
     },
     {
@@ -73,8 +73,8 @@ const ExecutionList: React.FC = () => {
       title: '状态',
       dataIndex: 'status',
       width: 100,
-      render: (status: ExecutionStatus) => {
-        const config = EXECUTION_STATUS_CONFIG[status];
+      render: (status: RecordStatus) => {
+        const config = RECORD_STATUS_CONFIG[status];
         return <Tag color={config?.color}>{config?.label || status}</Tag>;
       },
     },
@@ -141,10 +141,10 @@ const ExecutionList: React.FC = () => {
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
         <Space>
           <Select
-            placeholder="任务ID筛选"
+            placeholder="定时器ID筛选"
             style={{ width: 120 }}
             allowClear
-            onChange={(value) => setParams({ ...params, task_id: value, page: 1 })}
+            onChange={(value) => setParams({ ...params, timer_id: value, page: 1 })}
             showSearch
           />
           <Select
@@ -152,7 +152,7 @@ const ExecutionList: React.FC = () => {
             style={{ width: 120 }}
             allowClear
             onChange={(value) => setParams({ ...params, status: value, page: 1 })}
-            options={Object.entries(EXECUTION_STATUS_CONFIG).map(([key, config]) => ({
+            options={Object.entries(RECORD_STATUS_CONFIG).map(([key, config]) => ({
               label: config.label,
               value: key,
             }))}
@@ -160,7 +160,7 @@ const ExecutionList: React.FC = () => {
         </Space>
         <Button
           icon={<ReloadOutlined />}
-          onClick={loadExecutions}
+          onClick={loadRecords}
         >
           刷新
         </Button>
@@ -169,7 +169,7 @@ const ExecutionList: React.FC = () => {
       {/* 执行记录表格 */}
       <Table
         columns={columns}
-        dataSource={executions}
+        dataSource={records}
         rowKey="id"
         loading={loading}
         scroll={{ x: 1500 }}
@@ -192,50 +192,50 @@ const ExecutionList: React.FC = () => {
         footer={null}
         width={800}
       >
-        {selectedExecution && (
+        {selectedRecord && (
           <Descriptions bordered column={2} size="small">
-            <Descriptions.Item label="执行ID">{selectedExecution.id}</Descriptions.Item>
-            <Descriptions.Item label="任务ID">{selectedExecution.task_id}</Descriptions.Item>
+            <Descriptions.Item label="执行ID">{selectedRecord.id}</Descriptions.Item>
+            <Descriptions.Item label="定时器ID">{selectedRecord.timer_id}</Descriptions.Item>
             <Descriptions.Item label="触发时间">
-              {new Date(selectedExecution.trigger_time).toLocaleString('zh-CN')}
+              {new Date(selectedRecord.trigger_time).toLocaleString('zh-CN')}
             </Descriptions.Item>
             <Descriptions.Item label="状态">
-              <Tag color={EXECUTION_STATUS_CONFIG[selectedExecution.status]?.color}>
-                {EXECUTION_STATUS_CONFIG[selectedExecution.status]?.label}
+              <Tag color={RECORD_STATUS_CONFIG[selectedRecord.status]?.color}>
+                {RECORD_STATUS_CONFIG[selectedRecord.status]?.label}
               </Tag>
             </Descriptions.Item>
-            <Descriptions.Item label="重试次数">{selectedExecution.retry_count}</Descriptions.Item>
-            <Descriptions.Item label="响应码">{selectedExecution.response_code || '-'}</Descriptions.Item>
+            <Descriptions.Item label="重试次数">{selectedRecord.retry_count}</Descriptions.Item>
+            <Descriptions.Item label="响应码">{selectedRecord.response_code || '-'}</Descriptions.Item>
             <Descriptions.Item label="耗时">
-              {selectedExecution.duration ? `${selectedExecution.duration}ms` : '-'}
+              {selectedRecord.duration ? `${selectedRecord.duration}ms` : '-'}
             </Descriptions.Item>
-            <Descriptions.Item label="请求方法">{selectedExecution.request_method}</Descriptions.Item>
+            <Descriptions.Item label="请求方法">{selectedRecord.request_method}</Descriptions.Item>
             <Descriptions.Item label="请求地址" span={2}>
-              {selectedExecution.request_url}
+              {selectedRecord.request_url}
             </Descriptions.Item>
             <Descriptions.Item label="请求体" span={2}>
               <pre style={{ maxHeight: 100, overflow: 'auto', margin: 0 }}>
-                {selectedExecution.request_body || '-'}
+                {selectedRecord.request_body || '-'}
               </pre>
             </Descriptions.Item>
             <Descriptions.Item label="响应体" span={2}>
               <pre style={{ maxHeight: 100, overflow: 'auto', margin: 0 }}>
-                {selectedExecution.response_body || '-'}
+                {selectedRecord.response_body || '-'}
               </pre>
             </Descriptions.Item>
-            {selectedExecution.error_message && (
+            {selectedRecord.error_message && (
               <Descriptions.Item label="错误信息" span={2}>
-                <span style={{ color: '#ff4d4f' }}>{selectedExecution.error_message}</span>
+                <span style={{ color: '#ff4d4f' }}>{selectedRecord.error_message}</span>
               </Descriptions.Item>
             )}
             <Descriptions.Item label="开始时间">
-              {selectedExecution.started_at
-                ? new Date(selectedExecution.started_at).toLocaleString('zh-CN')
+              {selectedRecord.started_at
+                ? new Date(selectedRecord.started_at).toLocaleString('zh-CN')
                 : '-'}
             </Descriptions.Item>
             <Descriptions.Item label="完成时间">
-              {selectedExecution.finished_at
-                ? new Date(selectedExecution.finished_at).toLocaleString('zh-CN')
+              {selectedRecord.finished_at
+                ? new Date(selectedRecord.finished_at).toLocaleString('zh-CN')
                 : '-'}
             </Descriptions.Item>
           </Descriptions>

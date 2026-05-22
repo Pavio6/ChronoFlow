@@ -1,19 +1,14 @@
-import type { TaskStatus, ExecutionStatus } from '../types';
+import type { TimerStatus, RecordStatus } from '../types';
 
-// 任务状态配置
-export const TASK_STATUS_CONFIG: Record<TaskStatus, { label: string; color: string }> = {
-  INIT: { label: '初始化', color: 'default' },
-  ENABLED: { label: '已启用', color: 'success' },
-  DISABLED: { label: '已禁用', color: 'warning' },
-  RUNNING: { label: '运行中', color: 'processing' },
-  SUCCESS: { label: '成功', color: 'success' },
-  FAILED: { label: '失败', color: 'error' },
-  TIMEOUT: { label: '超时', color: 'error' },
-  DELETED: { label: '已删除', color: 'default' },
+// 定时器状态配置
+export const TIMER_STATUS_CONFIG: Record<TimerStatus, { label: string; color: string }> = {
+  ACTIVE: { label: '已激活', color: 'success' },
+  INACTIVE: { label: '未激活', color: 'default' },
+  DELETED: { label: '已删除', color: 'error' },
 };
 
-// 执行状态配置
-export const EXECUTION_STATUS_CONFIG: Record<ExecutionStatus, { label: string; color: string }> = {
+// 执行记录状态配置
+export const RECORD_STATUS_CONFIG: Record<RecordStatus, { label: string; color: string }> = {
   PENDING: { label: '等待中', color: 'default' },
   RUNNING: { label: '执行中', color: 'processing' },
   SUCCESS: { label: '成功', color: 'success' },
@@ -35,4 +30,12 @@ export const CRON_PRESETS = [
   { label: '工作日9点', value: '0 0 9 * * 1-5' },
   { label: '每周一9点', value: '0 0 9 * * 1' },
   { label: '每月1号0点', value: '0 0 0 1 * *' },
+];
+
+// 应用名预设（示例）
+export const APP_PRESETS = [
+  'default',
+  'order-service',
+  'payment-service',
+  'notification-service',
 ];

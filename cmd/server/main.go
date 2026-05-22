@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"strings"
 	"syscall"
 	"time"
 
@@ -15,83 +13,126 @@ import (
 	"github.com/chronoflow/internal/handler"
 	"github.com/chronoflow/internal/middleware"
 	"github.com/chronoflow/internal/pkg/bloom"
+	"github.com/chronoflow/internal/pkg/cron"
+	"github.com/chronoflow/internal/pkg/memory"
 	"github.com/chronoflow/internal/pkg/metrics"
-	"github.com/chronoflow/internal/pkg/redis"
+	"github.com/chronoflow/internal/pkg/pool"
+	redisqueue "github.com/chronoflow/internal/pkg/redis"
+	"github.com/chronoflow/internal/pkg/retry"
 	"github.com/chronoflow/internal/repository"
 	"github.com/chronoflow/internal/service"
 	"github.com/chronoflow/pkg/logger"
 	"github.com/gin-gonic/gin"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 
 func main() {
-	// 加载配置
+	// ========== 1. 加载配置 ==========
 	cfg, err := config.Load("./config")
 	if err != nil {
-		fmt.Printf("failed to load config: %v\n", err)
+		fmt.Printf("加载配置失败: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 初始化日志
-	logger.Init(
-		cfg.Log.Level,
-		cfg.Log.Format,
-		cfg.Log.Output,
-		cfg.Log.FilePath,
-	)
+	// ========== 2. 初始化日志 ==========
+	logger.Init(cfg.Log.Level, cfg.Log.Format, cfg.Log.Output, cfg.Log.FilePath)
 	defer logger.Sync()
+	logger.Info("ChronoFlow 启动中...")
 
-	logger.Info("starting ChronoFlow server",
-		zap.Int("port", cfg.Server.Port),
-		zap.String("mode", cfg.Server.Mode),
-	)
-
-	// 初始化数据库
+	// ========== 3. 初始化数据库 ==========
 	if err := repository.InitDatabase(&cfg.Database); err != nil {
-		logger.Fatal("failed to init database", zap.Error(err))
+		logger.Fatal("初始化数据库失败", zap.Error(err))
 	}
 	defer repository.CloseDatabase()
+	logger.Info("数据库连接成功")
 
-	// 自动迁移数据库表
+	// 自动迁移表结构
 	if err := repository.AutoMigrate(); err != nil {
-		logger.Fatal("failed to auto migrate", zap.Error(err))
+		logger.Fatal("数据库表迁移失败", zap.Error(err))
 	}
+	logger.Info("数据库表迁移完成")
 
-	// 初始化 Redis
-	redisClient, err := redis.InitRedis(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
+	// ========== 4. 初始化 Redis ==========
+	redisClient, err := redisqueue.InitRedis(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
 	if err != nil {
-		logger.Fatal("failed to init redis", zap.Error(err))
+		logger.Fatal("初始化 Redis 失败", zap.Error(err))
 	}
 	defer redisClient.Close()
+	logger.Info("Redis 连接成功")
 
-	// 创建 Redis 队列
-	redisQueue := redis.NewRedisQueue(redisClient)
+	// ========== 5. 初始化基础设施组件 ==========
+	// Redis 任务队列
+	queue := redisqueue.NewRedisQueue(redisClient)
 
-	// 创建布隆过滤器
+	// Bloom Filter
 	bloomFilter := bloom.NewFilter(redisClient)
 
-	// 创建仓库层
-	taskRepo := repository.NewTaskRepository(repository.DB)
-	execRepo := repository.NewExecutionRepository(repository.DB)
+	// 内存缓存（最大 10000 条）
+	timerCache := memory.NewTimerCache(10000)
 
-	// 创建服务层
-	taskService := service.NewTaskService(taskRepo, execRepo)
-	execService := service.NewExecutionService(execRepo)
+	// Cron 表达式解析器
+	cronParser := cron.NewCronParser()
 
-	// 创建执行器
-	executor := service.NewExecutor(taskRepo, execRepo, &cfg.Executor, &cfg.Retry)
+	// 重试计算器
+	retryCalculator := retry.NewCalculator(retry.Config{
+		Strategy:        retry.Strategy(cfg.Retry.Strategy),
+		InitialInterval: time.Duration(cfg.Retry.InitialInterval) * time.Second,
+		MaxInterval:     time.Duration(cfg.Retry.MaxInterval) * time.Second,
+		Multiplier:      cfg.Retry.Multiplier,
+	})
 
-	// 创建调度器
-	scheduler := service.NewScheduler(taskRepo, redisQueue, &cfg.Scheduler)
+	// Prometheus 指标上报器
+	reporter := metrics.NewReporter()
 
-	// 创建触发器
-	trigger := service.NewTrigger(taskRepo, execRepo, redisQueue, executor, bloomFilter, &cfg.Scheduler)
+	// ========== 6. 初始化仓库层 ==========
+	defRepo := repository.NewTimerDefinitionRepository(repository.DB)
+	recRepo := repository.NewTimerRecordRepository(repository.DB)
 
-	// 创建 Prometheus 监控
-	metricsReporter := metrics.NewReporter()
-	_ = metricsReporter
+	// ========== 7. 初始化协程池 ==========
+	workerPool, err := pool.NewGoWorkerPool(cfg.Executor.WorkerPoolSize)
+	if err != nil {
+		logger.Fatal("创建协程池失败", zap.Error(err))
+	}
+	defer workerPool.Release()
+	logger.Info("协程池创建成功", zap.Int("size", cfg.Executor.WorkerPoolSize))
 
-	// 创建 Gin 引擎
+	// ========== 8. 初始化服务层 ==========
+	// 执行器（被 Trigger 调用）
+	executor := service.NewExecutor(
+		defRepo, recRepo, queue, bloomFilter, timerCache,
+		retryCalculator, reporter, &cfg.Executor,
+	)
+
+	// 触发器（被 Scheduler 调用）
+	trigger := service.NewTrigger(queue, workerPool, executor, &cfg.Scheduler)
+
+	// 调度器
+	scheduler := service.NewScheduler(queue, workerPool, trigger, &cfg.Scheduler)
+
+	// 迁移器
+	migrator := service.NewMigrator(defRepo, recRepo, queue, cronParser, &cfg.Scheduler)
+
+	// 定时器 CRUD 服务
+	timerService := service.NewTimerService(defRepo, recRepo, cronParser)
+
+	// ========== 9. 启动后台服务 ==========
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// 启动迁移器（一级迁移：MySQL -> Redis）
+	go migrator.Start(ctx)
+
+	// 启动调度器（轮询 + 分发）
+	go scheduler.Start(ctx)
+
+	logger.Info("后台服务已启动",
+		zap.Int("step1_duration", cfg.Scheduler.Step1Duration),
+		zap.Int("step2_duration", cfg.Scheduler.Step2Duration),
+		zap.Int("bucket_num", cfg.Scheduler.BucketNum),
+	)
+
+	// ========== 10. 配置 HTTP 服务器 ==========
 	gin.SetMode(cfg.Server.Mode)
 	r := gin.New()
 
@@ -100,109 +141,61 @@ func main() {
 	r.Use(middleware.Logger())
 	r.Use(middleware.CORS())
 
-	// 注册路由
-	taskHandler := handler.NewTaskHandler(taskService, execService)
-	taskHandler.RegisterRoutes(r)
+	// 注册 API 路由
+	timerHandler := handler.NewTimerHandler(timerService)
+	timerHandler.RegisterRoutes(r)
 
-	// 静态文件服务 - 前端资源
-	frontendDir := "./web/dist"
-	if _, err := os.Stat(frontendDir); err == nil {
-		// 服务静态资源文件
-		r.Static("/assets", filepath.Join(frontendDir, "assets"))
+	// Prometheus 指标端点
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
-		// 处理 SPA 路由 - 所有非 API 请求返回 index.html
-		r.NoRoute(func(c *gin.Context) {
-			// 如果是 API 请求，返回 404
-			if strings.HasPrefix(c.Request.URL.Path, "/api") {
-				c.JSON(http.StatusNotFound, gin.H{
-					"code":    404,
-					"message": "API not found",
-				})
-				return
-			}
-
-			// 否则返回 index.html（支持前端路由）
-			c.File(filepath.Join(frontendDir, "index.html"))
+	// 健康检查端点
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{
+			"status": "ok",
+			"time":   time.Now().Format(time.RFC3339),
 		})
+	})
 
-		logger.Info("frontend static files served", zap.String("dir", frontendDir))
-	} else {
-		logger.Warn("frontend directory not found, skipping static file serving")
-	}
+	// 静态文件服务（前端）
+	r.Static("/assets", "./web/dist/assets")
+	r.StaticFile("/", "./web/dist/index.html")
+	r.NoRoute(func(c *gin.Context) {
+		// SPA 路由回退：非 API 请求都返回 index.html
+		c.File("./web/dist/index.html")
+	})
 
-	// 创建 HTTP 服务器
+	// ========== 11. 启动 HTTP 服务器 ==========
+	addr := fmt.Sprintf(":%d", cfg.Server.Port)
 	srv := &http.Server{
-		Addr:    fmt.Sprintf(":%d", cfg.Server.Port),
+		Addr:    addr,
 		Handler: r,
 	}
 
-	// 创建上下文用于优雅关闭
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	// 启动调度器
-	go scheduler.Start(ctx)
-
-	// 启动触发器
-	go trigger.Start(ctx)
-
-	// 启动重试处理器
 	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				executor.ProcessRetries(ctx)
-			}
-		}
-	}()
-
-	// 启动超时处理器
-	go func() {
-		ticker := time.NewTicker(30 * time.Second)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				executor.HandleTimeouts(ctx)
-			}
-		}
-	}()
-
-	// 启动 HTTP 服务器
-	go func() {
-		logger.Info("HTTP server started", zap.String("addr", srv.Addr))
+		logger.Info("HTTP 服务器启动", zap.String("addr", addr))
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatal("failed to start server", zap.Error(err))
+			logger.Fatal("HTTP 服务器启动失败", zap.Error(err))
 		}
 	}()
 
-	// 等待中断信号
+	// ========== 12. 优雅关闭 ==========
 	quit := make(chan os.Signal, 1)
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
-	<-quit
+	sig := <-quit
+	logger.Info("收到关闭信号，开始优雅关闭...", zap.String("signal", sig.String()))
 
-	logger.Info("shutting down server...")
-
-	// 取消上下文，停止调度器和触发器
+	// 停止后台服务
+	migrator.Stop()
+	scheduler.Stop()
 	cancel()
 
-	// 停止调度器和触发器
-	scheduler.Stop()
-	trigger.Stop()
-
-	// 优雅关闭 HTTP 服务器
+	// 关闭 HTTP 服务器（等待 5 秒处理完当前请求）
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		logger.Error("server forced to shutdown", zap.Error(err))
+		logger.Error("HTTP 服务器关闭失败", zap.Error(err))
 	}
 
-	logger.Info("server exited")
+	logger.Info("ChronoFlow 已关闭")
 }

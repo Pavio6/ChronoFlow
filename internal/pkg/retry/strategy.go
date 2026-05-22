@@ -10,74 +10,75 @@ type Strategy string
 
 const (
 	// StrategyExponential 指数退避策略
+	// 间隔公式: initial * multiplier^retryCount，上限为 maxInterval
 	StrategyExponential Strategy = "exponential"
 	// StrategyFixed 固定间隔策略
+	// 每次重试间隔固定为 initialInterval
 	StrategyFixed Strategy = "fixed"
 )
 
 // Config 重试策略配置
 type Config struct {
-	Strategy        Strategy `json:"strategy"`         // 重试策略
-	InitialInterval int      `json:"initial_interval"` // 初始重试间隔（秒）
-	MaxInterval     int      `json:"max_interval"`     // 最大重试间隔（秒）
-	Multiplier      float64  `json:"multiplier"`       // 指数退避倍数
+	// Strategy 重试策略类型
+	Strategy Strategy
+	// InitialInterval 初始重试间隔
+	InitialInterval time.Duration
+	// MaxInterval 最大重试间隔（指数退避时的上限）
+	MaxInterval time.Duration
+	// Multiplier 退避倍数（仅指数退避策略使用）
+	Multiplier float64
 }
 
 // Calculator 重试时间计算器
 type Calculator struct {
-	config Config
+	cfg Config
 }
 
-// NewCalculator 创建重试计算器实例
-func NewCalculator(config Config) *Calculator {
-	return &Calculator{config: config}
+// NewCalculator 创建重试时间计算器
+func NewCalculator(cfg Config) *Calculator {
+	// 设置默认倍数
+	if cfg.Multiplier <= 0 {
+		cfg.Multiplier = 2.0
+	}
+	// 设置默认最大间隔
+	if cfg.MaxInterval <= 0 {
+		cfg.MaxInterval = 30 * time.Minute
+	}
+
+	return &Calculator{cfg: cfg}
 }
 
-// CalculateNextRetryTime 计算下次重试时间
+// CalculateNextRetryTime 计算下一次重试时间
 // retryCount: 当前已重试次数（从 0 开始）
-// 返回下次重试的时间点
 func (c *Calculator) CalculateNextRetryTime(retryCount int) time.Time {
-	var interval time.Duration
+	var delay time.Duration
 
-	switch c.config.Strategy {
+	switch c.cfg.Strategy {
 	case StrategyExponential:
-		interval = c.exponentialBackoff(retryCount)
+		delay = c.calculateExponential(retryCount)
 	case StrategyFixed:
-		interval = c.fixedInterval()
+		delay = c.cfg.InitialInterval
 	default:
-		interval = c.exponentialBackoff(retryCount)
+		// 未知策略回退到固定间隔
+		delay = c.cfg.InitialInterval
 	}
 
-	return time.Now().Add(interval)
+	return time.Now().Add(delay)
 }
 
-// exponentialBackoff 指数退避算法
-// 第一次失败：10 秒后重试
-// 第二次失败：30 秒后重试
-// 第三次失败：60 秒后重试
-func (c *Calculator) exponentialBackoff(retryCount int) time.Duration {
-	// 计算指数退避间隔：initial_interval * multiplier^retryCount
-	interval := float64(c.config.InitialInterval) * math.Pow(c.config.Multiplier, float64(retryCount))
+// calculateExponential 计算指数退避间隔
+// 公式: initial * multiplier^retryCount，上限为 maxInterval
+func (c *Calculator) calculateExponential(retryCount int) time.Duration {
+	// 计算 exponential backoff: initial * multiplier^retryCount
+	backoff := float64(c.cfg.InitialInterval) * math.Pow(c.cfg.Multiplier, float64(retryCount))
 
-	// 限制最大间隔
-	if interval > float64(c.config.MaxInterval) {
-		interval = float64(c.config.MaxInterval)
+	// 转换为 Duration
+	delay := time.Duration(backoff)
+
+	// 超过最大间隔时截断
+	if delay > c.cfg.MaxInterval {
+		delay = c.cfg.MaxInterval
 	}
 
-	return time.Duration(interval) * time.Second
-}
-
-// fixedInterval 固定间隔策略
-func (c *Calculator) fixedInterval() time.Duration {
-	return time.Duration(c.config.InitialInterval) * time.Second
-}
-
-// DefaultConfig 返回默认重试配置
-func DefaultConfig() Config {
-	return Config{
-		Strategy:        StrategyExponential,
-		InitialInterval: 10,
-		MaxInterval:     60,
-		Multiplier:      3.0,
-	}
+	return delay
 }

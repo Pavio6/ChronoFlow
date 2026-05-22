@@ -2,41 +2,55 @@ package redis
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 
-	"github.com/chronoflow/pkg/logger"
 	"github.com/redis/go-redis/v9"
-	"go.uber.org/zap"
 )
 
+// Redis key 前缀常量
 const (
-	// TaskQueueKey 任务队列的 Redis ZSet 键名
-	TaskQueueKey = "chronoflow:task_queue"
-	// TaskLockPrefix 任务锁的 Redis 键前缀
-	TaskLockPrefix = "chronoflow:task_lock:"
-	// IdempotentPrefix 幂等键前缀
+	// TaskQueuePrefix 任务队列 ZSet key 前缀，完整 key: {prefix}{time_range}:{bucket}
+	TaskQueuePrefix = "chronoflow:timer:"
+	// SchedulerLockPrefix 调度器分布式锁前缀
+	SchedulerLockPrefix = "chronoflow:scheduler_lock:"
+	// IdempotentPrefix 幂等性 key 前缀
 	IdempotentPrefix = "chronoflow:idempotent:"
+	// BloomPrefix 布隆过滤器 key 前缀
+	BloomPrefix = "chronoflow:bloom:"
 )
+
+// popDueTasksLua 原子弹出到期任务的 Lua 脚本
+// 1. ZRANGEBYSCORE 获取 score <= now 的成员
+// 2. 逐个 ZREM 删除
+// 3. 返回被弹出的成员列表
+var popDueTasksLua = redis.NewScript(`
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local count = tonumber(ARGV[2])
+local members = redis.call('ZRANGEBYSCORE', key, '-inf', now, 'LIMIT', 0, count)
+if #members > 0 then
+    for i, member in ipairs(members) do
+        redis.call('ZREM', key, member)
+    end
+end
+return members
+`)
 
 // TaskTrigger 任务触发信息
 type TaskTrigger struct {
-	TaskID      int64     `json:"task_id"`
-	TriggerTime time.Time `json:"trigger_time"`
+	// TimerID 定时器 ID
+	TimerID int64
+	// TriggerTime 触发时间
+	TriggerTime time.Time
 }
 
-// RedisQueue Redis 任务队列
+// RedisQueue 基于 Redis ZSet 的时间片任务队列
 type RedisQueue struct {
 	client *redis.Client
 }
 
-// NewRedisQueue 创建 Redis 队列实例
-func NewRedisQueue(client *redis.Client) *RedisQueue {
-	return &RedisQueue{client: client}
-}
-
-// InitRedis 初始化 Redis 连接
+// InitRedis 初始化 Redis 客户端连接
 func InitRedis(addr, password string, db int) (*redis.Client, error) {
 	client := redis.NewClient(&redis.Options{
 		Addr:     addr,
@@ -44,120 +58,166 @@ func InitRedis(addr, password string, db int) (*redis.Client, error) {
 		DB:       db,
 	})
 
+	// 连接健康检查
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	if err := client.Ping(ctx).Err(); err != nil {
-		return nil, fmt.Errorf("failed to connect redis: %w", err)
+		return nil, fmt.Errorf("redis 连接失败: %w", err)
 	}
 
-	logger.Info("redis connected successfully", zap.String("addr", addr))
 	return client, nil
 }
 
-// PushTask 将任务推入调度队列
-// 使用 ZSet 存储，score 为触发时间的时间戳
-func (q *RedisQueue) PushTask(ctx context.Context, trigger *TaskTrigger) error {
-	data, err := json.Marshal(trigger)
-	if err != nil {
-		return fmt.Errorf("failed to marshal task trigger: %w", err)
-	}
+// NewRedisQueue 创建任务队列实例
+func NewRedisQueue(client *redis.Client) *RedisQueue {
+	return &RedisQueue{client: client}
+}
 
-	// 使用触发时间作为 score
+// buildQueueKey 构建队列 ZSet 的完整 key
+// 格式: {TaskQueuePrefix}{time_range}:{bucket}
+func buildQueueKey(timeRange string, bucket int) string {
+	return fmt.Sprintf("%s%s:%d", TaskQueuePrefix, timeRange, bucket)
+}
+
+// buildLockKey 构建分布式锁的完整 key
+func buildLockKey(timeRange string, bucket int) string {
+	return fmt.Sprintf("%s%s:%d", SchedulerLockPrefix, timeRange, bucket)
+}
+
+// PushTask 推送单个任务到指定时间片桶
+// 使用 ZAdd 以 triggerTime 的 Unix 时间戳作为 score
+func (q *RedisQueue) PushTask(ctx context.Context, timeRange string, bucket int, trigger *TaskTrigger) error {
+	key := buildQueueKey(timeRange, bucket)
+	member := fmt.Sprintf("%d:%d", trigger.TimerID, trigger.TriggerTime.UnixMilli())
 	score := float64(trigger.TriggerTime.Unix())
-	return q.client.ZAdd(ctx, TaskQueueKey, redis.Z{
+
+	return q.client.ZAdd(ctx, key, redis.Z{
 		Score:  score,
-		Member: string(data),
+		Member: member,
 	}).Err()
 }
 
-// PopDueTasks 取出到期的任务（原子操作）
-// 使用 Lua 脚本保证取任务和删除任务的原子性
-func (q *RedisQueue) PopDueTasks(ctx context.Context, count int64) ([]*TaskTrigger, error) {
+// BatchPushTasks 批量推送任务到指定时间片桶（Pipeline 模式）
+func (q *RedisQueue) BatchPushTasks(ctx context.Context, timeRange string, bucket int, triggers []*TaskTrigger) error {
+	if len(triggers) == 0 {
+		return nil
+	}
+
+	key := buildQueueKey(timeRange, bucket)
+	pipe := q.client.Pipeline()
+
+	for _, trigger := range triggers {
+		member := fmt.Sprintf("%d:%d", trigger.TimerID, trigger.TriggerTime.UnixMilli())
+		score := float64(trigger.TriggerTime.Unix())
+		pipe.ZAdd(ctx, key, redis.Z{
+			Score:  score,
+			Member: member,
+		})
+	}
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("批量推送任务失败: %w", err)
+	}
+
+	return nil
+}
+
+// PopDueTasks 原子弹出指定时间片桶中的到期任务
+// 通过 Lua 脚本保证 ZRANGEBYSCORE + ZREM 的原子性
+func (q *RedisQueue) PopDueTasks(ctx context.Context, timeRange string, bucket int, count int64) ([]*TaskTrigger, error) {
+	key := buildQueueKey(timeRange, bucket)
 	now := time.Now().Unix()
 
-	// Lua 脚本：原子性地获取并删除到期任务
-	script := redis.NewScript(`
-		local tasks = redis.call('ZRANGEBYSCORE', KEYS[1], '-inf', ARGV[1], 'LIMIT', 0, ARGV[2])
-		if #tasks > 0 then
-			redis.call('ZREM', KEYS[1], unpack(tasks))
-		end
-		return tasks
-	`)
-
-	result, err := script.Run(ctx, q.client, []string{TaskQueueKey}, now, count).StringSlice()
+	// 执行 Lua 脚本，原子获取并删除到期任务
+	result, err := popDueTasksLua.Run(ctx, q.client, []string{key}, now, count).Result()
 	if err != nil {
 		if err == redis.Nil {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to pop due tasks: %w", err)
+		return nil, fmt.Errorf("弹出到期任务失败: %w", err)
 	}
 
-	var triggers []*TaskTrigger
-	for _, data := range result {
-		var trigger TaskTrigger
-		if err := json.Unmarshal([]byte(data), &trigger); err != nil {
-			logger.Error("failed to unmarshal task trigger",
-				zap.String("data", data),
-				zap.Error(err),
-			)
+	// 解析返回的成员列表
+	members, ok := result.([]interface{})
+	if !ok || len(members) == 0 {
+		return nil, nil
+	}
+
+	triggers := make([]*TaskTrigger, 0, len(members))
+	for _, m := range members {
+		memberStr, ok := m.(string)
+		if !ok {
 			continue
 		}
-		triggers = append(triggers, &trigger)
+
+		// 解析 member 格式: {timerID}:{triggerTimeMs}
+		var timerID int64
+		var triggerTimeMs int64
+		if _, err := fmt.Sscanf(memberStr, "%d:%d", &timerID, &triggerTimeMs); err != nil {
+			continue
+		}
+
+		triggers = append(triggers, &TaskTrigger{
+			TimerID:     timerID,
+			TriggerTime: time.UnixMilli(triggerTimeMs),
+		})
 	}
 
 	return triggers, nil
 }
 
-// RemoveTask 从队列中移除任务
-func (q *RedisQueue) RemoveTask(ctx context.Context, trigger *TaskTrigger) error {
-	data, err := json.Marshal(trigger)
+// AcquireSchedulerLock 获取调度器分布式锁（SETNX）
+func (q *RedisQueue) AcquireSchedulerLock(ctx context.Context, timeRange string, bucket int, expiration time.Duration) (bool, error) {
+	key := buildLockKey(timeRange, bucket)
+	ok, err := q.client.SetNX(ctx, key, "1", expiration).Result()
 	if err != nil {
-		return fmt.Errorf("failed to marshal task trigger: %w", err)
+		return false, fmt.Errorf("获取调度器锁失败: %w", err)
 	}
-
-	return q.client.ZRem(ctx, TaskQueueKey, string(data)).Err()
+	return ok, nil
 }
 
-// AcquireTaskLock 获取任务执行锁
-// 使用 SETNX 实现分布式锁，防止同一任务被多个实例同时执行
-func (q *RedisQueue) AcquireTaskLock(ctx context.Context, taskID int64, triggerTime time.Time, expiration time.Duration) (bool, error) {
-	key := fmt.Sprintf("%s%d:%s", TaskLockPrefix, taskID, triggerTime.Format(time.RFC3339))
-	result, err := q.client.SetNX(ctx, key, "1", expiration).Result()
-	if err != nil {
-		return false, fmt.Errorf("failed to acquire task lock: %w", err)
+// ReleaseSchedulerLock 释放调度器分布式锁
+func (q *RedisQueue) ReleaseSchedulerLock(ctx context.Context, timeRange string, bucket int) error {
+	key := buildLockKey(timeRange, bucket)
+	if err := q.client.Del(ctx, key).Err(); err != nil {
+		return fmt.Errorf("释放调度器锁失败: %w", err)
 	}
-	return result, nil
+	return nil
 }
 
-// ReleaseTaskLock 释放任务执行锁
-func (q *RedisQueue) ReleaseTaskLock(ctx context.Context, taskID int64, triggerTime time.Time) error {
-	key := fmt.Sprintf("%s%d:%s", TaskLockPrefix, taskID, triggerTime.Format(time.RFC3339))
-	return q.client.Del(ctx, key).Err()
+// ExtendSchedulerLock 续期调度器分布式锁
+func (q *RedisQueue) ExtendSchedulerLock(ctx context.Context, timeRange string, bucket int, expiration time.Duration) error {
+	key := buildLockKey(timeRange, bucket)
+	if err := q.client.Expire(ctx, key, expiration).Err(); err != nil {
+		return fmt.Errorf("续期调度器锁失败: %w", err)
+	}
+	return nil
 }
 
-// SetIdempotentKey 设置幂等键
+// buildIdempotentKey 构建幂等性检查的完整 key
+func buildIdempotentKey(timerID int64, triggerTime time.Time) string {
+	return fmt.Sprintf("%s%d:%d", IdempotentPrefix, timerID, triggerTime.UnixMilli())
+}
+
+// SetIdempotentKey 设置幂等性 key（SETNX）
 // 用于防止同一任务在同一触发时间被重复执行
-func (q *RedisQueue) SetIdempotentKey(ctx context.Context, taskID int64, triggerTime time.Time, expiration time.Duration) (bool, error) {
-	key := fmt.Sprintf("%s%d:%s", IdempotentPrefix, taskID, triggerTime.Format(time.RFC3339))
-	result, err := q.client.SetNX(ctx, key, "1", expiration).Result()
+func (q *RedisQueue) SetIdempotentKey(ctx context.Context, timerID int64, triggerTime time.Time, expiration time.Duration) (bool, error) {
+	key := buildIdempotentKey(timerID, triggerTime)
+	ok, err := q.client.SetNX(ctx, key, "1", expiration).Result()
 	if err != nil {
-		return false, fmt.Errorf("failed to set idempotent key: %w", err)
+		return false, fmt.Errorf("设置幂等 key 失败: %w", err)
 	}
-	return result, nil
+	return ok, nil
 }
 
-// IsIdempotent 检查是否已执行过
-func (q *RedisQueue) IsIdempotent(ctx context.Context, taskID int64, triggerTime time.Time) (bool, error) {
-	key := fmt.Sprintf("%s%d:%s", IdempotentPrefix, taskID, triggerTime.Format(time.RFC3339))
+// IsIdempotent 检查幂等性 key 是否已存在
+func (q *RedisQueue) IsIdempotent(ctx context.Context, timerID int64, triggerTime time.Time) (bool, error) {
+	key := buildIdempotentKey(timerID, triggerTime)
 	exists, err := q.client.Exists(ctx, key).Result()
 	if err != nil {
-		return false, fmt.Errorf("failed to check idempotent key: %w", err)
+		return false, fmt.Errorf("检查幂等 key 失败: %w", err)
 	}
 	return exists > 0, nil
-}
-
-// QueueSize 获取队列中的任务数量
-func (q *RedisQueue) QueueSize(ctx context.Context) (int64, error) {
-	return q.client.ZCard(ctx, TaskQueueKey).Result()
 }

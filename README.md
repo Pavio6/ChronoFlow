@@ -1,31 +1,19 @@
 # ChronoFlow - Go 分布式定时任务调度系统
 
-一个基于 Go 实现的分布式定时任务调度系统，支持 Cron 表达式、任务 CRUD、HTTP Callback、手动触发、执行日志、失败重试和超时控制。
+基于 xTimer 架构实现的分布式定时任务调度系统，采用**时间分片 + 分桶并发 + 三级存储**设计，支持 Cron 表达式定时、HTTP 回调、失败重试、幂等去重、分布式锁等能力。
 
-## 功能特性
+## 核心特性
 
-### 第一阶段：基础功能
-
-- **任务 CRUD**：创建、查询、更新、删除任务
-- **任务启用/禁用**：灵活控制任务状态
-- **Cron 表达式解析**：支持标准 Cron 表达式（秒级精度）
-- **Redis ZSet 延迟触发**：使用 Redis 有序集合管理任务触发时间
-- **HTTP Callback**：执行 HTTP 回调通知
-- **执行日志**：记录每次执行的详细信息
-
-### 第二阶段：可靠性增强
-
-- **任务状态机**：完整的任务生命周期管理（INIT → ENABLED → RUNNING → SUCCESS/FAILED）
-- **失败重试**：指数退避重试策略（10s → 30s → 60s）
-- **超时控制**：HTTP 回调超时检测和处理
-- **手动触发**：支持手动执行任务
-- **幂等控制**：防止同一任务在同一时间被重复执行
-
-### 第三阶段：分布式能力（已完成）
-
-- **Redis Lua 原子取任务**：保证任务获取的原子性
-- **分布式锁**：防止多实例重复执行
-- **宕机恢复**：超时任务自动重新调度
+| 特性 | 说明 |
+|------|------|
+| **时间分片** | 按分钟级时间范围切分 Redis ZSet，减少单次查询量 |
+| **分桶并发** | 按 `timer_id % bucket_num` 分桶，每桶独立 goroutine 并发处理 |
+| **三级存储** | MySQL → Redis ZSet → 节点内存缓存，逐级加速 |
+| **三层幂等** | Bloom Filter → Redis SETNX → MySQL 查重，防止重复执行 |
+| **分布式锁** | Scheduler 对每个分片 SETNX 抢锁，多实例互斥 |
+| **指数退避** | 失败重试 10s → 30s → 60s，避免无效重试风暴 |
+| **协程池** | ants 协程池控制并发数，防止资源耗尽 |
+| **Prometheus** | 内置指标采集（执行次数/耗时/成功率/重试/队列深度） |
 
 ## 技术栈
 
@@ -33,151 +21,118 @@
 |------|------|
 | 语言 | Go 1.26.2+ |
 | Web 框架 | Gin |
-| 数据库 | MySQL / PostgreSQL |
-| 缓存与队列 | Redis ZSet |
-| Cron 解析 | robfig/cron |
+| ORM | GORM |
+| 数据库 | MySQL 8.0 |
+| 缓存与队列 | Redis 7（ZSet + Lua 脚本） |
+| Cron 解析 | robfig/cron/v3 |
 | 日志 | zap |
 | 配置 | viper |
+| 协程池 | panjf2000/ants/v2 |
+| 指标 | prometheus/client_golang |
 | 前端 | React + TypeScript + Ant Design |
-| 前端构建 | Vite |
 | 容器化 | Docker / Docker Compose |
 
 ## 系统架构
 
-```mermaid
-graph TB
-    subgraph "客户端"
-        User[用户/调用方]
-    end
-
-    subgraph "ChronoFlow 系统"
-        subgraph "API 层"
-            Gin[Gin HTTP Server]
-            Handler[Task Handler]
-        end
-
-        subgraph "Service 层"
-            TaskSvc[Task Service]
-            ExecSvc[Execution Service]
-        end
-
-        subgraph "调度引擎"
-            Scheduler[Scheduler<br/>定期扫描任务]
-            Trigger[Trigger<br/>取到期任务]
-            Executor[Executor<br/>执行 HTTP 回调]
-        end
-
-        subgraph "基础设施"
-            CronParser[Cron Parser<br/>表达式解析]
-            RetryCalc[Retry Calculator<br/>指数退避]
-            StateMachine[State Machine<br/>状态流转]
-        end
-
-        subgraph "Repository 层"
-            TaskRepo[Task Repository]
-            ExecRepo[Execution Repository]
-        end
-    end
-
-    subgraph "外部存储"
-        MySQL[(MySQL<br/>任务/执行记录)]
-        Redis[(Redis<br/>ZSet 延迟队列)]
-    end
-
-    subgraph "外部服务"
-        Callback[HTTP Callback<br/>目标服务]
-    end
-
-    User -->|REST API| Gin
-    Gin --> Handler
-    Handler --> TaskSvc
-    Handler --> ExecSvc
-
-    TaskSvc --> TaskRepo
-    TaskSvc --> CronParser
-    ExecSvc --> ExecRepo
-
-    TaskRepo --> MySQL
-    ExecRepo --> MySQL
-
-    Scheduler -->|扫描待调度任务| TaskRepo
-    Scheduler -->|写入触发时间| Redis
-    Trigger-->|Lua 脚本原子取任务| Redis
-    Trigger -->|创建执行记录| ExecRepo
-    Trigger -->|提交执行| Executor
-
-    Executor -->|HTTP 请求| Callback
-    Executor -->|重试计算| RetryCalc
-    Executor -->|状态流转| StateMachine
-    Executor -->|更新状态| TaskRepo
-    Executor -->|记录结果| ExecRepo
-
-    style User fill:#e1f5fe
-    style MySQL fill:#fff3e0
-    style Redis fill:#fce4ec
-    style Callback fill:#e8f5e9
+```
+┌─────────────────────────────────────────────────────────┐
+│                    ChronoFlow                            │
+│                                                         │
+│  ┌──────────┐    ┌──────────┐    ┌──────────┐          │
+│  │ Migrator │    │Scheduler │    │  Trigger │          │
+│  │(批量打点)│    │(抢锁+分发)│    │(轮询ZSet)│          │
+│  └────┬─────┘    └────┬─────┘    └────┬─────┘          │
+│       │               │               │                 │
+│       │          [goroutine pool]      │                 │
+│       │               │               │                 │
+│       ▼               ▼               ▼                 │
+│  ┌──────────────────────────────────────────┐           │
+│  │              Executor                     │           │
+│  │  (幂等去重 + HTTP回调 + 更新记录)          │           │
+│  └──────────────────────────────────────────┘           │
+│                                                         │
+│  ┌──────────────────────────────────────────┐           │
+│  │           内存缓存层 (Memory Cache)       │           │
+│  └──────────────────────────────────────────┘           │
+└─────────────────────────────────────────────────────────┘
+         │                │                │
+    ┌────▼────┐     ┌────▼────┐     ┌────▼────┐
+    │  MySQL  │     │  Redis  │     │  Memory │
+    │(持久化) │     │(ZSet队列)│     │(本地缓存)│
+    └─────────┘     └─────────┘     └─────────┘
 ```
 
+### 核心流程
+
+```
+定时器创建 → 定义存 MySQL（status=INACTIVE）
+     │
+定时器激活 → Migrator 批量预创建未来 step1 的定时任务
+     │         → 定时任务存 MySQL + Redis ZSet（按分片分桶）
+     │
+每 1s → Scheduler 轮询
+     │   → 计算当前 time_range
+     │   → 遍历每个桶，抢分布式锁
+     │   → 抢到锁 → 从协程池提交 Trigger
+     │
+Trigger → 在时间片内轮询 Redis ZSet {time_range}:{bucket}
+     │    → ZRANGEBYSCORE 取到期任务
+     │    → 从协程池提交 Executor
+     │    → 完成后更新锁 TTL
+     │
+Executor → bloom filter 查重
+     │    → Redis 幂等键检查（bloom 命中时）
+     │    → MySQL 查重（Redis 也命中时）
+     │    → 查定时器定义（先内存，miss 再 MySQL）
+     │    → 执行 HTTP 回调
+     │    → bloom filter 打点 + Redis 幂等键设置
+     │    → 更新 MySQL 记录状态
+```
 
 ## 项目结构
 
 ```
 ChronoFlow/
-├── cmd/
-│   └── server/
-│       └── main.go              # 程序入口
+├── cmd/server/main.go                    # 程序入口
+├── config/config.yaml                    # 配置文件
 ├── internal/
-│   ├── config/
-│   │   └── config.go            # 配置管理
+│   ├── config/config.go                  # Viper 配置管理
 │   ├── model/
-│   │   ├── task.go              # 任务模型
-│   │   ├── task_execution.go    # 执行记录模型
-│   │   └── state_machine.go     # 状态机定义
+│   │   ├── timer_definition.go           # 定时器定义模型
+│   │   ├── timer_record.go               # 执行记录模型
+│   │   └── state_machine.go              # 状态机定义
 │   ├── repository/
-│   │   ├── database.go          # 数据库初始化
-│   │   ├── task_repository.go   # 任务数据访问
-│   │   └── execution_repository.go # 执行记录数据访问
+│   │   ├── database.go                   # GORM MySQL 初始化
+│   │   ├── timer_definition_repo.go      # 定时器定义 CRUD
+│   │   └── timer_record_repo.go          # 执行记录 CRUD
 │   ├── service/
-│   │   ├── task_service.go      # 任务业务逻辑
-│   │   ├── execution_service.go # 执行记录业务逻辑
-│   │   ├── scheduler.go         # 任务调度器
-│   │   ├── trigger.go           # 任务触发器
-│   │   └── executor.go          # HTTP 回调执行器
+│   │   ├── migrator.go                   # 一级迁移（MySQL → Redis）
+│   │   ├── scheduler.go                  # 调度器（抢锁 + 分发）
+│   │   ├── trigger.go                    # 触发器（轮询 ZSet）
+│   │   ├── executor.go                   # 执行器（幂等 + 回调）
+│   │   └── timer_service.go              # 定时器 CRUD 业务逻辑
 │   ├── handler/
-│   │   └── task_handler.go      # HTTP API 处理器
+│   │   └── timer_handler.go              # HTTP API 处理器
 │   ├── middleware/
-│   │   └── logger.go            # 日志中间件
+│   │   ├── cors.go                       # CORS 中间件
+│   │   ├── logger.go                     # 请求日志中间件
+│   │   └── recovery.go                   # Panic 恢复中间件
 │   └── pkg/
-│       ├── cron/
-│       │   └── parser.go        # Cron 解析器
-│       ├── redis/
-│       │   └── queue.go         # Redis 任务队列
-│       └── retry/
-│           └── strategy.go      # 重试策略
-├── pkg/
-│   └── logger/
-│       └── logger.go            # 日志工具
-├── web/                         # 前端项目
-│   ├── src/
-│   │   ├── api/                 # API 客户端
-│   │   ├── components/          # 公共组件
-│   │   ├── layouts/             # 布局组件
-│   │   ├── pages/               # 页面组件
-│   │   │   ├── TaskList.tsx     # 任务列表
-│   │   │   ├── TaskForm.tsx     # 任务表单
-│   │   │   └── ExecutionList.tsx # 执行记录
-│   │   ├── types/               # TypeScript 类型
-│   │   └── utils/               # 工具函数
-│   ├── package.json
-│   └── vite.config.ts
-├── config/
-│   └── config.yaml              # 配置文件
-├── migrations/
-│   └── 001_init.sql             # 数据库初始化脚本
-├── docker-compose.yml           # Docker Compose 配置
-├── Dockerfile                   # Docker 镜像构建
-├── go.mod                       # Go 模块定义
-└── README.md                    # 项目文档
+│       ├── bloom/filter.go               # Redis 布隆过滤器
+│       ├── cron/parser.go                # Cron 表达式解析器
+│       ├── memory/cache.go               # 内存定时器缓存
+│       ├── metrics/reporter.go           # Prometheus 指标上报
+│       ├── pool/pool.go                  # ants 协程池
+│       ├── redis/queue.go                # Redis ZSet 队列 + Lua + 锁
+│       └── retry/strategy.go             # 指数退避重试策略
+├── pkg/logger/logger.go                  # zap 日志封装
+├── web/                                  # React 前端
+├── tests/callback-server/main.go         # 测试回调服务
+├── migrations/001_init.sql               # 数据库初始化脚本
+├── docker-compose.yml                    # Docker 编排
+├── Dockerfile                            # 多阶段构建
+├── Makefile                              # 开发命令
+└── docs/                                 # 项目文档
 ```
 
 ## 快速开始
@@ -185,298 +140,242 @@ ChronoFlow/
 ### 环境要求
 
 - Go 1.26.2+
-- Node.js 18+ (前端开发)
-- MySQL 8.0+ 或 PostgreSQL
+- Node.js 18+（前端开发）
+- MySQL 8.0+
 - Redis 7.0+
 
-### 本地开发
-
-#### 后端开发
-
-1. 克隆项目
+### 1. 启动基础设施
 
 ```bash
-git clone https://github.com/your-username/chronoflow.git
-cd chronoflow
+# 启动 MySQL + Redis
+make docker-up
 ```
 
-2. 安装依赖
+### 2. 初始化数据库
 
 ```bash
-go mod tidy
+# 方式一：手动执行 SQL
+mysql -u root -p123456 < migrations/001_init.sql
+
+# 方式二：程序启动时自动迁移（GORM AutoMigrate）
+# 无需手动执行，程序会自动创建表结构
 ```
 
-3. 配置数据库
+### 3. 配置
 
-编辑 `config/config.yaml`，配置数据库和 Redis 连接信息。
-
-4. 初始化数据库
-
-```bash
-mysql -u root -p < migrations/001_init.sql
-```
-
-5. 启动后端服务
-
-```bash
-go run cmd/server/main.go
-```
-
-#### 前端开发
-
-1. 进入前端目录
-
-```bash
-cd web
-```
-
-2. 安装依赖
-
-```bash
-npm install
-```
-
-3. 启动开发服务器
-
-```bash
-npm run dev
-```
-
-前端开发服务器将在 http://localhost:3000 启动，API 请求会自动代理到后端 http://localhost:8080。
-
-4. 构建生产版本
-
-```bash
-npm run build
-```
-
-构建产物将输出到 `web/dist` 目录，后端会自动服务这些静态文件。
-
-### Docker Compose 部署
-
-1. 启动所有服务
-
-```bash
-docker-compose up -d
-```
-
-2. 查看日志
-
-```bash
-docker-compose logs -f chronoflow
-```
-
-3. 停止服务
-
-```bash
-docker-compose down
-```
-
-## API 文档
-
-### 基础路径
-
-```
-http://localhost:8080/api/v1
-```
-
-### 任务管理
-
-#### 创建任务
-
-```http
-POST /tasks
-Content-Type: application/json
-
-{
-  "name": "数据备份任务",
-  "description": "每天凌晨2点执行数据备份",
-  "cron_expr": "0 0 2 * * *",
-  "callback_url": "https://api.example.com/backup",
-  "callback_method": "POST",
-  "callback_body": "{\"type\":\"daily\"}",
-  "callback_headers": {"Authorization": "Bearer token123"},
-  "timeout": 60,
-  "max_retries": 3
-}
-```
-
-**响应：**
-
-```json
-{
-  "code": 201,
-  "message": "task created",
-  "data": {
-    "id": 1,
-    "name": "数据备份任务",
-    "status": "INIT",
-    "next_trigger_time": "2024-01-02T02:00:00Z"
-  }
-}
-```
-
-#### 查询任务列表
-
-```http
-GET /tasks?page=1&page_size=20&status=ENABLED&keyword=备份
-```
-
-#### 获取任务详情
-
-```http
-GET /tasks/:id
-```
-
-#### 更新任务
-
-```http
-PUT /tasks/:id
-Content-Type: application/json
-
-{
-  "name": "新任务名称",
-  "timeout": 120
-}
-```
-
-#### 删除任务
-
-```http
-DELETE /tasks/:id
-```
-
-#### 启用任务
-
-```http
-POST /tasks/:id/enable
-```
-
-#### 禁用任务
-
-```http
-POST /tasks/:id/disable
-```
-
-#### 手动触发任务
-
-```http
-POST /tasks/:id/trigger
-```
-
-### 执行记录
-
-#### 查询执行记录列表
-
-```http
-GET /executions?page=1&page_size=20&task_id=1&status=SUCCESS
-```
-
-#### 获取执行记录详情
-
-```http
-GET /executions/:id
-```
-
-### 健康检查
-
-```http
-GET /health
-```
-
-## 任务状态流转
-
-```
-INIT → ENABLED → DISABLED
-         ↓
-      RUNNING → SUCCESS → ENABLED
-         ↓
-      FAILED → RETRYING → RUNNING
-         ↓
-      TIMEOUT → FAILED
-         ↓
-      DELETED
-```
-
-## Cron 表达式格式
-
-系统支持标准 Cron 表达式，包含秒字段：
-
-```
-┌─────────────秒 (0-59)
-│ ┌─────────────分 (0-59)
-│ │ ┌─────────────时 (0-23)
-│ │ │ ┌─────────────日 (1-31)
-│ │ │ │ ┌─────────────月 (1-12)
-│ │ │ │ │ ┌─────────────周 (0-6, 0=周日)
-│ │ │ │ │ │
-* * * * * *
-```
-
-**示例：**
-
-| 表达式 | 说明 |
-|--------|------|
-| `0 0 2 * * *` | 每天凌晨 2 点 |
-| `0 */5 * * * *` | 每 5 分钟 |
-| `0 0 9-18 * * 1-5` | 工作日 9-18 点每小时 |
-| `0 30 8 1 * *` | 每月 1 号 8:30 |
-
-## 配置说明
-
-配置文件位于 `config/config.yaml`：
+编辑 `config/config.yaml`，确认数据库和 Redis 连接信息：
 
 ```yaml
-server:
-  port: 8080
-  mode: debug
-
 database:
-  driver: mysql
   dsn: "root:123456@tcp(127.0.0.1:3306)/chronoflow?charset=utf8mb4&parseTime=True&loc=Local"
 
 redis:
   addr: "127.0.0.1:6379"
-  password: ""
-  db: 0
-
-scheduler:
-  scan_interval: 5
-  batch_size: 100
-
-executor:
-  timeout: 30
-  max_retries: 3
-  worker_pool_size: 10
-
-retry:
-  strategy: exponential
-  initial_interval: 10
-  max_interval: 60
-  multiplier: 3.0
 ```
 
-## 设计亮点
+### 4. 启动后端
 
-### 1. 状态机设计
+```bash
+make dev-backend
+# 或
+go run cmd/server/main.go
+```
 
-使用状态机管理任务生命周期，通过预定义的状态转换规则保证状态流转的合法性，防止非法状态变更。
+服务启动后：
+- API: http://localhost:8080/api/v1/timers
+- Prometheus: http://localhost:8080/metrics
+- 健康检查: http://localhost:8080/health
 
-### 2. Redis ZSet 延迟队列
+### 5. 启动前端
 
-利用 Redis ZSet 的特性（按 score 排序），将任务触发时间作为 score，实现高效的延迟任务调度。
+```bash
+make dev-frontend
+# 或
+cd web && npm install && npm run dev
+```
 
-### 3. 指数退避重试
+前端访问: http://localhost:3000
 
-失败重试采用指数退避策略（10s → 30s → 60s），避免在服务不可用时产生大量无效重试。
+## 测试步骤
 
-### 4. 幂等控制
+### 步骤一：启动测试回调服务
 
-通过 Redis SETNX 实现幂等键，保证同一任务在同一触发时间只会被执行一次。
+```bash
+make test-callback
+# 或
+go run tests/callback-server/main.go
+```
 
-### 5. 工作池控制
+测试回调服务监听在 `http://localhost:9090`，提供以下接口：
 
-使用带缓冲的 channel 实现工作池，控制并发执行的任务数量，防止系统过载。
+| 接口 | 说明 |
+|------|------|
+| `POST /callback/success` | 立即返回成功 |
+| `POST /callback/slow` | 延迟 10 秒后返回（测试超时） |
+| `POST /callback/error` | 返回 500 错误（测试重试） |
+| `GET /stats` | 查看调用统计 |
+
+### 步骤二：创建定时器
+
+```bash
+# 创建一个每 30 秒触发的定时器
+curl -X POST http://localhost:8080/api/v1/timers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "app": "test",
+    "name": "测试定时器-30秒",
+    "cron_expr": "*/30 * * * * *",
+    "callback_url": "http://localhost:9090/callback/success",
+    "callback_method": "POST",
+    "callback_body": "{\"msg\": \"hello\"}",
+    "timeout": 10,
+    "max_retries": 3
+  }'
+```
+
+预期响应：
+
+```json
+{
+  "code": 201,
+  "message": "创建成功",
+  "data": {
+    "id": 1,
+    "app": "test",
+    "name": "测试定时器-30秒",
+    "status": "INACTIVE",
+    ...
+  }
+}
+```
+
+### 步骤三：激活定时器
+
+```bash
+# 激活定时器（ID=1）
+curl -X POST http://localhost:8080/api/v1/timers/1/activate
+```
+
+激活后，Migrator 会自动预创建执行记录并推入 Redis 队列。
+
+### 步骤四：观察执行结果
+
+```bash
+# 查看定时器列表
+curl http://localhost:8080/api/v1/timers
+
+# 查看执行记录
+curl http://localhost:8080/api/v1/records
+
+# 查看指定定时器的执行记录
+curl http://localhost:8080/api/v1/timers/1/records
+
+# 查看测试回调服务统计
+curl http://localhost:9090/stats
+```
+
+### 步骤五：测试重试机制
+
+```bash
+# 创建一个指向错误接口的定时器
+curl -X POST http://localhost:8080/api/v1/timers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "app": "test",
+    "name": "测试重试",
+    "cron_expr": "*/30 * * * * *",
+    "callback_url": "http://localhost:9090/callback/error",
+    "callback_method": "POST",
+    "timeout": 10,
+    "max_retries": 3
+  }'
+
+# 激活后观察执行记录中的 retry_count 和 status 变化
+curl http://localhost:8080/api/v1/records | jq
+```
+
+### 步骤六：测试超时
+
+```bash
+# 创建一个指向慢接口的定时器（超时设为 5 秒，但接口需要 10 秒）
+curl -X POST http://localhost:8080/api/v1/timers \
+  -H "Content-Type: application/json" \
+  -d '{
+    "app": "test",
+    "name": "测试超时",
+    "cron_expr": "*/30 * * * * *",
+    "callback_url": "http://localhost:9090/callback/slow",
+    "callback_method": "POST",
+    "timeout": 5,
+    "max_retries": 2
+  }'
+```
+
+### 步骤七：查看 Prometheus 指标
+
+```bash
+# 访问 Prometheus 指标端点
+curl http://localhost:8080/metrics
+
+# 关键指标：
+# chronoflow_timer_exec_total - 执行总次数
+# chronoflow_timer_exec_duration_ms - 执行耗时分布
+# chronoflow_timer_exec_success_total - 成功次数
+# chronoflow_timer_exec_failed_total - 失败次数
+# chronoflow_timer_exec_retry_total - 重试次数
+```
+
+### 步骤八：多实例部署测试
+
+```bash
+# 启动第二个实例（不同端口）
+PORT=8081 go run cmd/server/main.go
+
+# 两个实例会通过分布式锁自动协调，不会重复执行
+```
+
+## 配置说明
+
+| 配置项 | 默认值 | 说明 |
+|--------|--------|------|
+| `scheduler.step1_duration` | 3600 | 一级迁移时间步（秒），Migrator 预创建范围 |
+| `scheduler.step2_duration` | 300 | 二级迁移时间步（秒），内存缓存刷新间隔 |
+| `scheduler.bucket_num` | 3 | 分桶数量 |
+| `scheduler.scan_interval` | 1 | Scheduler 轮询间隔（秒） |
+| `executor.timeout` | 30 | HTTP 回调超时（秒） |
+| `executor.max_retries` | 3 | 最大重试次数 |
+| `executor.worker_pool_size` | 100 | 协程池大小 |
+| `retry.strategy` | exponential | 重试策略（exponential/fixed） |
+| `retry.initial_interval` | 10 | 初始重试间隔（秒） |
+| `retry.max_interval` | 60 | 最大重试间隔（秒） |
+| `retry.multiplier` | 3.0 | 退避倍数 |
+
+## Redis Key 结构
+
+| 用途 | Key 格式 | 类型 |
+|------|----------|------|
+| 任务队列 | `chronoflow:timer:{YYYY-MM-DD-HH:mm}:{bucket}` | ZSet |
+| Scheduler 锁 | `chronoflow:scheduler_lock:{time_range}:{bucket}` | String (SETNX) |
+| 幂等键 | `chronoflow:idempotent:{timer_id}:{trigger_time_ms}` | String (SETNX) |
+| 布隆过滤器 | `chronoflow:bloom:{date}` | String (bitmap) |
+
+## 定时器状态流转
+
+```
+INACTIVE ──激活──→ ACTIVE ──停用──→ INACTIVE
+    │                 │
+    └────删除────────→ DELETED（终态）
+```
+
+## 文档
+
+- [系统架构详解](docs/1-architecture.md)
+- [xTimer 原理与实现](docs/2-xtimer-theory.md)
+- [调度器模块详解](docs/3-scheduler.md)
+- [分布式锁与幂等](docs/4-distributed-lock.md)
+- [重试与恢复机制](docs/5-retry-and-recovery.md)
+- [API 接口文档](docs/6-api-reference.md)
+- [xTimer 架构分析](docs/7.xtimer-analysis.md)
 
 ## 许可证
 

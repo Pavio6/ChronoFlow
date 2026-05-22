@@ -1,16 +1,11 @@
-// 任务状态枚举
-export type TaskStatus = 
-  | 'INIT'      // 初始化
-  | 'ENABLED'   // 已启用
-  | 'DISABLED'  // 已禁用
-  | 'RUNNING'   // 运行中
-  | 'SUCCESS'   // 执行成功
-  | 'FAILED'    // 执行失败
-  | 'TIMEOUT'   // 执行超时
+// 定时器状态枚举
+export type TimerStatus =
+  | 'ACTIVE'    // 激活状态
+  | 'INACTIVE'  // 未激活状态
   | 'DELETED';  // 已删除
 
-// 执行状态枚举
-export type ExecutionStatus =
+// 执行记录状态枚举
+export type RecordStatus =
   | 'PENDING'   // 等待执行
   | 'RUNNING'   // 执行中
   | 'SUCCESS'   // 执行成功
@@ -18,29 +13,27 @@ export type ExecutionStatus =
   | 'RETRYING'  // 重试中
   | 'TIMEOUT';  // 执行超时
 
-// 任务接口
-export interface Task {
+// 定时器定义接口
+export interface TimerDefinition {
   id: number;
+  app: string;
   name: string;
-  description: string;
   cron_expr: string;
   callback_url: string;
   callback_method: string;
   callback_body: string;
   callback_headers: string;
-  status: TaskStatus;
+  status: TimerStatus;
   timeout: number;
   max_retries: number;
-  next_trigger_time: string | null;
-  last_trigger_time: string | null;
   created_at: string;
   updated_at: string;
 }
 
-// 创建任务请求
-export interface CreateTaskRequest {
+// 创建定时器请求
+export interface CreateTimerRequest {
+  app: string;
   name: string;
-  description?: string;
   cron_expr: string;
   callback_url: string;
   callback_method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
@@ -50,10 +43,9 @@ export interface CreateTaskRequest {
   max_retries?: number;
 }
 
-// 更新任务请求
-export interface UpdateTaskRequest {
+// 更新定时器请求
+export interface UpdateTimerRequest {
   name?: string;
-  description?: string;
   cron_expr?: string;
   callback_url?: string;
   callback_method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
@@ -63,20 +55,20 @@ export interface UpdateTaskRequest {
   max_retries?: number;
 }
 
-// 任务列表响应
-export interface TaskListResponse {
+// 定时器列表响应
+export interface TimerListResponse {
   total: number;
   page: number;
   page_size: number;
-  tasks: Task[];
+  items: TimerDefinition[];
 }
 
 // 执行记录接口
-export interface TaskExecution {
+export interface TimerRecord {
   id: number;
-  task_id: number;
+  timer_id: number;
   trigger_time: string;
-  status: ExecutionStatus;
+  status: RecordStatus;
   retry_count: number;
   request_url: string;
   request_method: string;
@@ -93,11 +85,11 @@ export interface TaskExecution {
 }
 
 // 执行记录列表响应
-export interface ExecutionListResponse {
+export interface RecordListResponse {
   total: number;
   page: number;
   page_size: number;
-  executions: TaskExecution[];
+  items: TimerRecord[];
 }
 
 // API 响应通用格式
@@ -107,18 +99,19 @@ export interface ApiResponse<T> {
   data?: T;
 }
 
-// 任务列表查询参数
-export interface TaskListParams {
+// 定时器列表查询参数
+export interface TimerListParams {
   page?: number;
   page_size?: number;
-  status?: TaskStatus;
+  app?: string;
+  status?: TimerStatus;
   keyword?: string;
 }
 
 // 执行记录查询参数
-export interface ExecutionListParams {
+export interface RecordListParams {
   page?: number;
   page_size?: number;
-  task_id?: number;
-  status?: ExecutionStatus;
+  timer_id?: number;
+  status?: RecordStatus;
 }

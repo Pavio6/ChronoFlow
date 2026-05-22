@@ -1,4 +1,4 @@
-.PHONY: help dev-frontend dev-backend dev docker-up docker-down docker-logs build clean
+.PHONY: help dev-frontend dev-backend dev docker-up docker-down docker-logs build clean test-callback
 
 # 默认目标
 help:
@@ -19,6 +19,9 @@ help:
 	@echo "    make build          - 构建前端和后端"
 	@echo "    make build-frontend - 构建前端"
 	@echo "    make build-backend  - 构建后端"
+	@echo ""
+	@echo "  测试命令:"
+	@echo "    make test-callback  - 启动测试回调服务 (端口 9090)"
 	@echo ""
 	@echo "  清理命令:"
 	@echo "    make clean          - 清理构建产物"
@@ -49,7 +52,7 @@ docker-up:
 
 # 停止 Docker 服务
 docker-down:
-	docker-compose down
+	docker-compose down -v
 
 # 查看 Docker 日志
 docker-logs:
@@ -80,3 +83,7 @@ clean:
 	rm -rf web/dist
 	rm -rf bin
 	@echo "构建产物已清理"
+
+# 启动测试回调服务
+test-callback:
+	go run tests/callback-server/main.go
