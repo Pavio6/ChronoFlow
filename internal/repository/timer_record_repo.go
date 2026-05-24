@@ -31,6 +31,8 @@ type TimerRecordRepository interface {
 	ExistsByTimerIDAndTriggerTime(timerID int64, triggerTime time.Time) (bool, error)
 	// GetPendingByTimeRange 获取指定时间范围内的 PENDING 记录（Trigger DB 回退用）
 	GetPendingByTimeRange(start, end time.Time) ([]*model.TimerRecord, error)
+	// HasPendingByTimeRangeAndBucket 判断指定时间范围和桶内是否存在 PENDING 记录
+	HasPendingByTimeRangeAndBucket(start, end time.Time, bucket int, bucketNum int) (bool, error)
 }
 
 // timerRecordRepo 定时器执行记录仓库实现
@@ -191,4 +193,18 @@ func (r *timerRecordRepo) GetPendingByTimeRange(start, end time.Time) ([]*model.
 		return nil, fmt.Errorf("查询待执行记录失败: %w", err)
 	}
 	return items, nil
+}
+
+// HasPendingByTimeRangeAndBucket 判断指定时间范围和桶内是否存在 PENDING 记录
+func (r *timerRecordRepo) HasPendingByTimeRangeAndBucket(start, end time.Time, bucket int, bucketNum int) (bool, error) {
+	var count int64
+	err := r.db.Model(&model.TimerRecord{}).
+		Where("status = ? AND trigger_time >= ? AND trigger_time < ? AND MOD(timer_id, ?) = ?",
+			model.RecordStatusPending, start, end, bucketNum, bucket).
+		Limit(1).
+		Count(&count).Error
+	if err != nil {
+		return false, fmt.Errorf("查询待执行记录失败: %w", err)
+	}
+	return count > 0, nil
 }

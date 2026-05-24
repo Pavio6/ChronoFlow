@@ -148,6 +148,16 @@ func (q *RedisQueue) GetDueTasks(ctx context.Context, timeRange string, bucket i
 	return triggers, nil
 }
 
+// QueueExists 判断指定时间片桶的任务队列是否存在
+func (q *RedisQueue) QueueExists(ctx context.Context, timeRange string, bucket int) (bool, error) {
+	key := buildQueueKey(timeRange, bucket)
+	count, err := q.client.Exists(ctx, key).Result()
+	if err != nil {
+		return false, fmt.Errorf("检查任务队列是否存在失败: %w", err)
+	}
+	return count > 0, nil
+}
+
 // AcquireSchedulerLock 获取调度器分布式锁（SETNX）
 func (q *RedisQueue) AcquireSchedulerLock(ctx context.Context, timeRange string, bucket int, expiration time.Duration) (bool, error) {
 	key := buildLockKey(timeRange, bucket)

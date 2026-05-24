@@ -99,7 +99,7 @@ func main() {
 	trigger := service.NewTrigger(queue, workerPool, executor, recRepo, &cfg.Scheduler)
 
 	// 调度器
-	scheduler := service.NewScheduler(queue, workerPool, trigger, &cfg.Scheduler)
+	scheduler := service.NewScheduler(queue, workerPool, trigger, recRepo, &cfg.Scheduler)
 
 	// 迁移器
 	migrator := service.NewMigrator(defRepo, recRepo, queue, cronParser, &cfg.Scheduler)

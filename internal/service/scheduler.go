@@ -8,6 +8,7 @@ import (
 	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/pkg/pool"
 	"github.com/chronoflow/internal/pkg/redis"
+	"github.com/chronoflow/internal/repository"
 	"github.com/chronoflow/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -24,6 +25,7 @@ type Scheduler struct {
 	queue   *redis.RedisQueue
 	pool    *pool.GoWorkerPool
 	trigger *Trigger
+	recRepo repository.TimerRecordRepository
 	cfg     *config.SchedulerConfig
 	quit    chan struct{}
 }
@@ -33,12 +35,14 @@ func NewScheduler(
 	queue *redis.RedisQueue,
 	pool *pool.GoWorkerPool,
 	trigger *Trigger,
+	recRepo repository.TimerRecordRepository,
 	cfg *config.SchedulerConfig,
 ) *Scheduler {
 	return &Scheduler{
 		queue:   queue,
 		pool:    pool,
 		trigger: trigger,
+		recRepo: recRepo,
 		cfg:     cfg,
 		quit:    make(chan struct{}),
 	}
@@ -118,6 +122,19 @@ func (s *Scheduler) schedule(ctx context.Context) {
 
 // handleSlice 处理单个时间片的单个桶：抢锁 → 提交 Trigger
 func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket int, bucketNum int, lockExpiration time.Duration) {
+	hasWork, err := s.hasSliceWork(ctx, timeRange, bucket, bucketNum)
+	if err != nil {
+		logger.Error("Scheduler 检查分片任务失败",
+			zap.String("time_range", timeRange),
+			zap.Int("bucket", bucket),
+			zap.Error(err),
+		)
+		return
+	}
+	if !hasWork {
+		return
+	}
+
 	// 尝试获取分布式锁
 	acquired, err := s.queue.AcquireSchedulerLock(ctx, timeRange, bucket, lockExpiration)
 	if err != nil {
@@ -155,6 +172,23 @@ func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket in
 			)
 		}
 	}
+}
+
+// hasSliceWork 判断分片是否有实际任务，避免空分片也创建 scheduler_lock
+func (s *Scheduler) hasSliceWork(ctx context.Context, timeRange string, bucket int, bucketNum int) (bool, error) {
+	exists, err := s.queue.QueueExists(ctx, timeRange, bucket)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		return true, nil
+	}
+
+	start, err := time.Parse("2006-01-02-15:04", timeRange)
+	if err != nil {
+		return false, fmt.Errorf("解析时间范围失败: %w", err)
+	}
+	return s.recRepo.HasPendingByTimeRangeAndBucket(start, start.Add(time.Minute), bucket, bucketNum)
 }
 
 // formatTimeRange 格式化时间范围标识（分钟级精度）
