@@ -7,6 +7,12 @@
       "skillPath": "skills/conventional-commit/SKILL.md",
       "computedHash": "f29c9486cede6c7b2df0cfb0a2e4aa67446552b991bcf17d1b309e903171f03d"
     },
+    "frontend-design": {
+      "source": "anthropics/skills",
+      "sourceType": "github",
+      "skillPath": "skills/frontend-design/SKILL.md",
+      "computedHash": "063a0e6448123cd359ad0044cc46b0e490cc7964d45ef4bb9fd842bd2ffbca67"
+    },
     "imagegen-frontend-web": {
       "source": "leonxlnx/taste-skill",
       "sourceType": "github",
