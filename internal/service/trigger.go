@@ -18,10 +18,10 @@ import (
 // 读取到期任务后从协程池提交 Executor 协程执行
 // 核心流程：
 //  1. 在时间片内持续轮询 Redis ZSet {time_range}:{bucket}
-//  2. ZRANGEBYSCORE 获取 score <= now 的到期任务（只读不删）
-//  3. 若 Redis 无结果，回退查询 MySQL（冷启动兜底）
-//  4. 从协程池提交 Executor 协程执行每个任务
-//  5. 完成后更新锁 TTL（延长过期时间，标记分片已处理）
+//  2. 每轮循环续期锁 TTL（参考 xTimer successExpireSeconds），防止空闲时锁过期
+//  3. ZRANGEBYSCORE 获取 score <= now 的到期任务（只读不删）
+//  4. 若 Redis 无结果，回退查询 MySQL（冷启动兜底）
+//  5. 从协程池提交 Executor 协程执行每个任务
 // 防重复机制：任务保留在 ZSet 中，依赖分布式锁保证同一分片同一时刻只有一个节点处理
 // DB 回退：冷启动时 Migrator 尚未预创建 Redis 数据，Trigger 从 MySQL 读取 PENDING 记录兜底
 type Trigger struct {
@@ -68,6 +68,10 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
 	// 每次批量取出的任务数量
 	batchSize := int64(100)
 
+	// 锁续期时间，参考 xTimer successExpireSeconds
+	// 每轮循环续期一次，防止空闲时锁提前过期导致并发重复执行
+	successExpiration := time.Duration(t.cfg.SuccessExpiration) * time.Second
+
 	for {
 		// 检查是否已超过时间片
 		if time.Now().After(timeSliceEnd) {
@@ -85,6 +89,15 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
 			logger.Debug("Trigger 因 context 取消而停止")
 			return
 		default:
+		}
+
+		// 每轮循环续期锁 TTL，防止空闲时锁过期
+		if err := t.queue.ExtendSchedulerLock(ctx, timeRange, bucket, successExpiration); err != nil {
+			logger.Warn("Trigger 续期锁失败",
+				zap.String("time_range", timeRange),
+				zap.Int("bucket", bucket),
+				zap.Error(err),
+			)
 		}
 
 		// 从 Redis ZSet 获取到期任务（只读不删，依赖分布式锁防重）
@@ -136,16 +149,6 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
 					zap.Error(err),
 				)
 			}
-		}
-
-		// 续期锁 TTL，标记此分片正在处理中
-		lockExpiration := time.Duration(t.cfg.ScanInterval*2) * time.Second
-		if err := t.queue.ExtendSchedulerLock(ctx, timeRange, bucket, lockExpiration); err != nil {
-			logger.Warn("Trigger 续期锁失败",
-				zap.String("time_range", timeRange),
-				zap.Int("bucket", bucket),
-				zap.Error(err),
-			)
 		}
 	}
 }

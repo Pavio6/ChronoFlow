@@ -19,7 +19,7 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 ├─────────────────────────────────────────────────┤
 │                  基础设施层                        │
 │  Cron Parser | Bloom Filter | Memory Cache       │
-│  Redis Queue | Retry Calculator | Metrics        │
+│  Redis Queue | Metrics                           │
 │  Worker Pool (ants)                               │
 ├─────────────────────────────────────────────────┤
 │                  数据存储层                        │
@@ -56,17 +56,17 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 **核心流程**：
 1. 计算当前分钟级时间范围 `time_range = YYYY-MM-DD-HH:mm`
 2. 同时处理当前分钟和上一分钟，避免边界任务遗漏
-3. 遍历桶号 `0 ~ bucket_num-1`
-4. 对每个桶 `SETNX` 抢锁，TTL = `scan_interval * 2`（见下方说明）
+3. 分别获取各分钟的动态分桶数（不同分钟可能不同）
+4. 对每个桶 `SETNX` 抢锁，TTL = `lock_expiration`（默认 70 秒，参考 xTimer `tryLockSeconds`，必须大于时间片时长 60 秒）
 5. 抢到锁 → 从 ants 协程池提交 Trigger 协程
 
-**为什么 TTL = scan_interval * 2？**
+**锁策略（参考 xTimer）**：
 
-- `scan_interval` 是 Scheduler 的轮询间隔（默认 1 秒）
-- `scan_interval * 2 = 2 秒`，即锁的过期时间
-- **为什么是 2 倍而非 1 倍？** 假设 TTL = 1 秒，当 Scheduler 在第 0.9 秒抢到锁，但 Trigger 还没来得及续期，锁就过期了，其他节点可能抢占同一分片
-- **2 倍的作用**：确保在下一轮轮询（1 秒后）到来前，锁不会过期。即使第一轮抢到锁后 Trigger 启动稍慢，也有足够时间续期
-- **避免脑裂**：如果两个节点同时持有同一分片的锁，会导致同一任务被重复执行。2 倍 TTL 保证锁的生命周期覆盖整个轮询周期
+- 初始锁 TTL = `lock_expiration`（默认 70 秒），确保覆盖整个时间片（60 秒）且有余量
+- Trigger 每轮循环续期锁 TTL = `success_expiration`（默认 130 秒），防止空闲时锁过期导致并发重复执行
+- 锁粒度：每个 `{time_range}:{bucket}` 一把锁
+- 多实例部署时，同一分片只会被一个实例处理
+- 动态分桶：当前分钟和上一分钟分别获取各自的 bucketNum，避免桶数不一致导致遗漏或越界
 
 ### 3. Trigger（触发器）
 
@@ -74,15 +74,15 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 
 **核心流程**：
 1. 计算时间片结束时间（`time_range` 对应分钟的 `:59`，如 `10:30` → `10:30:59`）
-2. 循环调用 `GetDueTasks`（`ZRANGEBYSCORE` 读取到期任务，只读不删）
-3. 若 Redis 无结果，回退查询 MySQL 中 `status = PENDING` 的记录（冷启动兜底）
-4. 对每个到期任务，从协程池提交 Executor 协程
-5. 续期锁 TTL（见下方说明）
+2. 每轮循环续期锁 TTL = `success_expiration`（默认 130 秒），防止空闲时锁过期
+3. 循环调用 `GetDueTasks`（`ZRANGEBYSCORE` 读取到期任务，只读不删）
+4. 若 Redis 无结果，回退查询 MySQL 中 `status = PENDING` 的记录（冷启动兜底）
+5. 对每个到期任务，从协程池提交 Executor 协程
 6. 时间片结束后退出（见下方说明）
 
 **时间片结束**：每个 Trigger 负责处理一分钟内某个桶的任务，`10:30` 时间片的结束时间是 `10:30:59`。到达该时刻后，当前 Trigger 退出，由下一分钟的 Scheduler 轮询启动新的 Trigger。
 
-**续期锁 TTL**：Trigger 在循环中定期延长锁的过期时间，防止锁在任务处理完前过期被其他节点抢占。锁的初始 TTL 为 `scan_interval * 2`（如 2 秒），每次循环续期为相同值。
+**续期锁 TTL（参考 xTimer）**：Trigger 在每轮循环开始时续期锁的过期时间（`success_expiration`，默认 130 秒），防止锁在空闲轮询期间过期被其他节点抢占。初始锁 TTL 为 `lock_expiration`（默认 70 秒），覆盖整个时间片（60 秒）。
 
 **防重复机制**：任务保留在 ZSet 中，依赖分布式锁（`time_range + bucket` 维度）保证同一分片同一时刻只有一个节点处理。进程崩溃后任务仍在 ZSet 中，下次轮询可重新捞取。
 
@@ -97,8 +97,8 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 4. 检查定时器状态（INACTIVE/DELETED 则跳过）
 5. 更新记录状态为 RUNNING
 6. 执行 HTTP 回调
-7. 根据结果更新状态（SUCCESS/FAILED/RETRYING）
-8. 执行成功 → Bloom Filter 打点（仅成功时写入，失败任务可重试）
+7. 根据结果更新状态（SUCCESS/FAILED）
+8. 执行成功 → Bloom Filter 打点
 
 ## 数据模型
 
@@ -116,7 +116,6 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 | callback_headers | TEXT | 请求头 JSON |
 | status | VARCHAR(32) | ACTIVE/INACTIVE/DELETED |
 | timeout | INT | 超时秒数 |
-| max_retries | INT | 最大重试次数 |
 
 ### timer_records（执行记录）
 
@@ -125,14 +124,12 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 | id | BIGINT PK | 记录 ID |
 | timer_id | BIGINT FK | 定时器 ID |
 | trigger_time | DATETIME | 计划触发时间 |
-| status | VARCHAR(32) | PENDING/RUNNING/SUCCESS/FAILED/RETRYING/TIMEOUT |
-| retry_count | INT | 已重试次数 |
+| status | VARCHAR(32) | PENDING/RUNNING/SUCCESS/FAILED/TIMEOUT |
 | request_url | VARCHAR(512) | 实际请求 URL |
 | response_code | INT | HTTP 响应码 |
 | response_body | TEXT | 响应体 |
 | error_message | TEXT | 错误信息 |
 | duration | BIGINT | 执行耗时（毫秒） |
-| next_retry_time | DATETIME | 下次重试时间 |
 
 ## 设计决策
 

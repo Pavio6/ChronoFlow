@@ -18,7 +18,6 @@ import (
 	"github.com/chronoflow/internal/pkg/metrics"
 	"github.com/chronoflow/internal/pkg/pool"
 	redisqueue "github.com/chronoflow/internal/pkg/redis"
-	"github.com/chronoflow/internal/pkg/retry"
 	"github.com/chronoflow/internal/repository"
 	"github.com/chronoflow/internal/service"
 	"github.com/chronoflow/pkg/logger"
@@ -74,14 +73,6 @@ func main() {
 	// Cron 表达式解析器
 	cronParser := cron.NewCronParser()
 
-	// 重试计算器
-	retryCalculator := retry.NewCalculator(retry.Config{
-		Strategy:        retry.Strategy(cfg.Retry.Strategy),
-		InitialInterval: time.Duration(cfg.Retry.InitialInterval) * time.Second,
-		MaxInterval:     time.Duration(cfg.Retry.MaxInterval) * time.Second,
-		Multiplier:      cfg.Retry.Multiplier,
-	})
-
 	// Prometheus 指标上报器
 	reporter := metrics.NewReporter()
 
@@ -101,7 +92,7 @@ func main() {
 	// 执行器（被 Trigger 调用，两层幂等：Bloom Filter + MySQL）
 	executor := service.NewExecutor(
 		defRepo, recRepo, bloomFilter, timerCache,
-		retryCalculator, reporter, &cfg.Executor,
+		reporter, &cfg.Executor,
 	)
 
 	// 触发器（被 Scheduler 调用，DB 回退需要 recRepo）
@@ -137,7 +128,6 @@ func main() {
 	r := gin.New()
 
 	// 注册中间件
-	r.Use(middleware.Recovery())
 	r.Use(middleware.Logger())
 	r.Use(middleware.CORS())
 

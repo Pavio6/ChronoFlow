@@ -30,7 +30,7 @@ chronoflow:scheduler_lock:2026-05-22-10:05:2   # 10:05 第 2 桶
 ### 锁的生命周期
 
 ```
-Scheduler 获取锁 (TTL=2s)
+Scheduler 获取锁 (TTL=70s, lock_expiration)
     │
     ▼
 提交 Trigger 到协程池
@@ -39,7 +39,7 @@ Scheduler 获取锁 (TTL=2s)
 Trigger 开始处理
     │
     ▼
-续期锁 TTL (延长 2s)  ←── 每次 PopDueTasks 后续期
+每轮循环续期锁 TTL (130s, success_expiration)  ←── 防止空闲时锁过期
     │
     ▼
 时间片结束 → 锁自然过期
@@ -48,8 +48,8 @@ Trigger 开始处理
 ### 锁的安全性
 
 1. **互斥性**：SETNX 保证同一 `{time_range}:{bucket}` 只有一个实例获取锁
-2. **防死锁**：锁有 TTL，即使持有者崩溃，锁也会自动过期
-3. **续期机制**：Trigger 处理过程中定期续期，防止锁提前过期
+2. **防死锁**：锁有 TTL（默认 70 秒），即使持有者崩溃，锁也会自动过期
+3. **续期机制**：Trigger 每轮循环续期锁 TTL（默认 130 秒），防止空闲时锁提前过期导致并发重复执行
 
 ### 多实例协调
 

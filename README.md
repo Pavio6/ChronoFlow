@@ -1,6 +1,6 @@
 # ChronoFlow - Go 分布式定时任务调度系统
 
-采用**时间分片 + 分桶并发 + 三级存储**设计的分布式定时任务调度系统，支持 Cron 表达式定时、HTTP 回调、失败重试、幂等去重、分布式锁等能力。
+采用**时间分片 + 分桶并发 + 三级存储**设计的分布式定时任务调度系统，支持 Cron 表达式定时、HTTP 回调、幂等去重、分布式锁等能力。
 
 ## 核心特性
 
@@ -11,9 +11,8 @@
 | **三级存储** | MySQL → Redis ZSet → 节点内存缓存，逐级加速 |
 | **两层幂等** | Bloom Filter → MySQL 查重，防止重复执行 |
 | **分布式锁** | Scheduler 对每个分片 SETNX 抢锁，多实例互斥 |
-| **指数退避** | 失败重试 10s → 30s → 60s，避免无效重试风暴 |
 | **协程池** | ants 协程池控制并发数，防止资源耗尽 |
-| **Prometheus** | 内置指标采集（执行次数/耗时/成功率/重试/队列深度） |
+| **Prometheus** | 内置指标采集（执行次数/耗时/成功率/队列深度） |
 
 ## 技术栈
 
@@ -75,17 +74,18 @@ graph TD
     
     F["每 1s Scheduler 轮询"] --> G["计算当前 time_range"]
     G --> G2["同时处理当前分钟和上一分钟"]
-    G2 --> H["遍历每个桶，抢分布式锁"]
+    G2 --> G3["分别获取各分钟的动态分桶数"]
+    G3 --> H["遍历每个桶，抢分布式锁<br/>TTL = lock_expiration (70s)"]
     H --> I{"抢到锁?"}
     I -->|是| J["从协程池提交 Trigger"]
     
     J --> K["在时间片内轮询 Redis ZSet<br/>{time_range}:{bucket}"]
-    K --> L["ZRANGEBYSCORE 取到期任务"]
+    K --> K2["每轮续期锁 TTL (success_expiration)"]
+    K2 --> L["ZRANGEBYSCORE 取到期任务"]
     L --> L2{"Redis 有结果?"}
     L2 -->|否| L3["回退查询 MySQL（冷启动兜底）"]
     L3 --> M
     L2 -->|是| M["从协程池提交 Executor"]
-    M --> N["完成后更新锁 TTL"]
     
     M --> O["bloom filter 查重"]
     O --> P{"bloom 命中?"}
@@ -126,16 +126,14 @@ ChronoFlow/
 │   │   └── timer_handler.go              # HTTP API 处理器
 │   ├── middleware/
 │   │   ├── cors.go                       # CORS 中间件
-│   │   ├── logger.go                     # 请求日志中间件
-│   │   └── recovery.go                   # Panic 恢复中间件
+│   │   └── logger.go                     # 请求日志中间件
 │   └── pkg/
 │       ├── bloom/filter.go               # Redis 布隆过滤器
 │       ├── cron/parser.go                # Cron 表达式解析器
 │       ├── memory/cache.go               # 内存定时器缓存
 │       ├── metrics/reporter.go           # Prometheus 指标上报
 │       ├── pool/pool.go                  # ants 协程池
-│       ├── redis/queue.go                # Redis ZSet 队列 + Lua + 锁
-│       └── retry/strategy.go             # 指数退避重试策略
+│       └── redis/queue.go                # Redis ZSet 队列 + Lua + 锁
 ├── pkg/logger/logger.go                  # zap 日志封装
 ├── web/                                  # React 前端
 ├── tests/callback-server/main.go         # 测试回调服务
@@ -223,7 +221,7 @@ go run tests/callback-server/main.go
 |------|------|
 | `POST /callback/success` | 立即返回成功 |
 | `POST /callback/slow` | 延迟 10 秒后返回（测试超时） |
-| `POST /callback/error` | 返回 500 错误（测试重试） |
+| `POST /callback/error` | 返回 500 错误 |
 | `GET /stats` | 查看调用统计 |
 
 ### 步骤二：创建定时器
@@ -239,8 +237,7 @@ curl -X POST http://localhost:8080/api/v1/timers \
     "callback_url": "http://localhost:9090/callback/success",
     "callback_method": "POST",
     "callback_body": "{\"msg\": \"hello\"}",
-    "timeout": 10,
-    "max_retries": 3
+    "timeout": 10
   }'
 ```
 
@@ -285,27 +282,7 @@ curl http://localhost:8080/api/v1/timers/1/records
 curl http://localhost:9090/stats
 ```
 
-### 步骤五：测试重试机制
-
-```bash
-# 创建一个指向错误接口的定时器
-curl -X POST http://localhost:8080/api/v1/timers \
-  -H "Content-Type: application/json" \
-  -d '{
-    "app": "test",
-    "name": "测试重试",
-    "cron_expr": "*/30 * * * * *",
-    "callback_url": "http://localhost:9090/callback/error",
-    "callback_method": "POST",
-    "timeout": 10,
-    "max_retries": 3
-  }'
-
-# 激活后观察执行记录中的 retry_count 和 status 变化
-curl http://localhost:8080/api/v1/records | jq
-```
-
-### 步骤六：测试超时
+### 步骤五：测试超时
 
 ```bash
 # 创建一个指向慢接口的定时器（超时设为 5 秒，但接口需要 10 秒）
@@ -317,12 +294,11 @@ curl -X POST http://localhost:8080/api/v1/timers \
     "cron_expr": "*/30 * * * * *",
     "callback_url": "http://localhost:9090/callback/slow",
     "callback_method": "POST",
-    "timeout": 5,
-    "max_retries": 2
+    "timeout": 5
   }'
 ```
 
-### 步骤七：查看 Prometheus 指标
+### 步骤六：查看 Prometheus 指标
 
 ```bash
 # 访问 Prometheus 指标端点
@@ -333,10 +309,9 @@ curl http://localhost:8080/metrics
 # chronoflow_timer_exec_duration_ms - 执行耗时分布
 # chronoflow_timer_exec_success_total - 成功次数
 # chronoflow_timer_exec_failed_total - 失败次数
-# chronoflow_timer_exec_retry_total - 重试次数
 ```
 
-### 步骤八：多实例部署测试
+### 步骤七：多实例部署测试
 
 ```bash
 # 启动第二个实例（不同端口）
@@ -354,12 +329,7 @@ PORT=8081 go run cmd/server/main.go
 | `scheduler.bucket_num` | 3 | 分桶数量 |
 | `scheduler.scan_interval` | 1 | Scheduler 轮询间隔（秒） |
 | `executor.timeout` | 30 | HTTP 回调超时（秒） |
-| `executor.max_retries` | 3 | 最大重试次数 |
 | `executor.worker_pool_size` | 100 | 协程池大小 |
-| `retry.strategy` | exponential | 重试策略（exponential/fixed） |
-| `retry.initial_interval` | 10 | 初始重试间隔（秒） |
-| `retry.max_interval` | 60 | 最大重试间隔（秒） |
-| `retry.multiplier` | 3.0 | 退避倍数 |
 
 ## Redis Key 结构
 
@@ -382,7 +352,6 @@ INACTIVE ──激活──→ ACTIVE ──停用──→ INACTIVE
 - [系统架构详解](docs/1-architecture.md)
 - [调度器模块详解](docs/3-scheduler.md)
 - [分布式锁与幂等](docs/4-distributed-lock.md)
-- [重试与恢复机制](docs/5-retry-and-recovery.md)
 - [API 接口文档](docs/6-api-reference.md)
 
 ## 许可证

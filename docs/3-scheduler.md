@@ -111,12 +111,20 @@ func (s *Scheduler) schedule(ctx context.Context) {
     currentTimeRange := formatTimeRange(now)
     prevTimeRange := formatTimeRange(now.Add(-time.Minute))
     
-    bucketNum, _ := s.queue.GetBucketNum(ctx, currentTimeRange, s.cfg.BucketNum)
-    lockExpiration := time.Duration(s.cfg.ScanInterval*2) * time.Second
+    // 分别获取各分钟的动态分桶数（不同分钟可能不同）
+    currentBucketNum, _ := s.queue.GetBucketNum(ctx, currentTimeRange, s.cfg.BucketNum)
+    prevBucketNum, _ := s.queue.GetBucketNum(ctx, prevTimeRange, s.cfg.BucketNum)
     
-    for bucket := 0; bucket < bucketNum; bucket++ {
-        s.handleSlice(ctx, currentTimeRange, bucket, bucketNum, lockExpiration)
-        s.handleSlice(ctx, prevTimeRange, bucket, bucketNum, lockExpiration)
+    // 锁初始 TTL，参考 xTimer tryLockSeconds（必须大于时间片时长 60 秒）
+    lockExpiration := time.Duration(s.cfg.LockExpiration) * time.Second
+    
+    // 处理当前分钟
+    for bucket := 0; bucket < currentBucketNum; bucket++ {
+        s.handleSlice(ctx, currentTimeRange, bucket, currentBucketNum, lockExpiration)
+    }
+    // 处理上一分钟
+    for bucket := 0; bucket < prevBucketNum; bucket++ {
+        s.handleSlice(ctx, prevTimeRange, bucket, prevBucketNum, lockExpiration)
     }
 }
 
@@ -132,9 +140,11 @@ func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket in
 
 ### 锁策略
 
-- 锁 TTL = `scan_interval * 2`（默认 2 秒）
+- 锁初始 TTL = `lock_expiration`（默认 70 秒，参考 xTimer `tryLockSeconds`，必须大于时间片时长 60 秒）
+- Trigger 每轮循环续期锁 TTL = `success_expiration`（默认 130 秒，参考 xTimer `successExpireSeconds`）
 - 锁粒度：每个 `{time_range}:{bucket}` 一把锁
 - 多实例部署时，同一分片只会被一个实例处理
+- 动态分桶：当前分钟和上一分钟分别获取各自的 bucketNum，避免桶数不一致导致遗漏或越界
 
 ## Trigger 详解
 
@@ -145,9 +155,9 @@ func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket in
 ### 核心职责
 
 - 在时间片内持续轮询 Redis ZSet
+- 每轮循环续期锁 TTL（参考 xTimer successExpireSeconds），防止空闲时锁过期
 - Redis 无结果时回退查询 MySQL（冷启动兜底）
 - 提交 Executor 到协程池
-- 续期锁 TTL
 
 ### 执行流程
 
@@ -155,9 +165,15 @@ func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket in
 func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketNum int) {
     timeSliceEnd := calculateTimeSliceEnd(timeRange)
     
+    // 锁续期时间，参考 xTimer successExpireSeconds
+    successExpiration := time.Duration(t.cfg.SuccessExpiration) * time.Second
+    
     for {
         // 检查时间片是否结束
         if time.Now().After(timeSliceEnd) { break }
+        
+        // 每轮循环续期锁 TTL，防止空闲时锁过期
+        t.queue.ExtendSchedulerLock(ctx, timeRange, bucket, successExpiration)
         
         // 从 Redis 获取到期任务
         triggers, _ := t.queue.GetDueTasks(ctx, timeRange, bucket, batchSize)
@@ -178,9 +194,6 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
                 t.executor.Execute(ctx, trigger)
             })
         }
-        
-        // 续期锁
-        t.queue.ExtendSchedulerLock(ctx, timeRange, bucket, lockTTL)
     }
 }
 
@@ -225,7 +238,6 @@ func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucke
 - 查询定时器定义
 - 执行 HTTP 回调
 - 更新执行记录状态
-- 处理重试逻辑
 
 ### 执行流程
 
@@ -246,31 +258,13 @@ func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucke
 
 4. 执行 HTTP 回调
    ├─ 成功 → 记录 response_code/response_body
-   └─ 失败 → 检查是否可重试
-            ├─ 可重试 → 设置 next_retry_time
-            └─ 不可重试 → 标记为 FAILED
+   └─ 失败 → 标记为 FAILED
 
 5. 后处理
-   - 执行成功 → Bloom Filter 打点（仅成功时写入）
+   - 执行成功 → Bloom Filter 打点
    - 更新 MySQL 记录
    - 上报 Prometheus 指标
 ```
-
-### 重试逻辑
-
-```go
-if record.IsRetryable(maxRetries) {
-    record.Status = model.RecordStatusRetrying
-    record.RetryCount++
-    nextRetryTime := retryCalculator.CalculateNextRetryTime(record.RetryCount)
-    record.NextRetryTime = &nextRetryTime
-}
-```
-
-重试策略（指数退避）：
-- 第 1 次重试：10 秒后
-- 第 2 次重试：30 秒后
-- 第 3 次重试：60 秒后
 
 ## 模块间通信
 

@@ -126,23 +126,26 @@ for _, def := range activeDefinitions {
 ### Scheduler → Trigger → Executor 协程池通信
 
 ```go
-// Scheduler：抢锁 + 提交 Trigger（同时处理当前分钟和上一分钟）
-for bucket := 0; bucket < bucketNum; bucket++ {
-    if acquired, _ := queue.AcquireSchedulerLock(ctx, timeRange, bucket, lockTTL); acquired {
-        pool.Submit(func() {
-            trigger.Run(ctx, timeRange, bucket, bucketNum)
-        })
+// Scheduler：抢锁 + 提交 Trigger（同时处理当前分钟和上一分钟，分别获取动态分桶数）
+currentBucketNum, _ := queue.GetBucketNum(ctx, currentTimeRange, defaultBucketNum)
+prevBucketNum, _ := queue.GetBucketNum(ctx, prevTimeRange, defaultBucketNum)
+lockExpiration := time.Duration(cfg.LockExpiration) * time.Second // 默认 70s，参考 xTimer tryLockSeconds
+
+for bucket := 0; bucket < currentBucketNum; bucket++ {
+    if acquired, _ := queue.AcquireSchedulerLock(ctx, currentTimeRange, bucket, lockExpiration); acquired {
+        pool.Submit(func() { trigger.Run(ctx, currentTimeRange, bucket, currentBucketNum) })
     }
-    prevTimeRange := formatTimeRange(now.Add(-time.Minute))
-    if acquired, _ := queue.AcquireSchedulerLock(ctx, prevTimeRange, bucket, lockTTL); acquired {
-        pool.Submit(func() {
-            trigger.Run(ctx, prevTimeRange, bucket, bucketNum)
-        })
+}
+for bucket := 0; bucket < prevBucketNum; bucket++ {
+    if acquired, _ := queue.AcquireSchedulerLock(ctx, prevTimeRange, bucket, lockExpiration); acquired {
+        pool.Submit(func() { trigger.Run(ctx, prevTimeRange, bucket, prevBucketNum) })
     }
 }
 
-// Trigger：轮询 + DB 回退 + 提交 Executor
+// Trigger：轮询 + 每轮续期锁 + DB 回退 + 提交 Executor
+successExpiration := time.Duration(cfg.SuccessExpiration) * time.Second // 默认 130s，参考 xTimer successExpireSeconds
 for !timeSliceExpired {
+    queue.ExtendSchedulerLock(ctx, timeRange, bucket, successExpiration) // 每轮续期，防止空闲时锁过期
     triggers, _ := queue.GetDueTasks(ctx, timeRange, bucket, batchSize)
     // Redis 无结果时回退查询 MySQL（冷启动兜底）
     if len(triggers) == 0 {

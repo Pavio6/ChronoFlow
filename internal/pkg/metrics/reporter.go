@@ -12,7 +12,7 @@ import (
 
 // Prometheus 指标名称常量
 const (
-	// TimerExecTotal 定时器执行总次数（含重试）
+	// TimerExecTotal 定时器执行总次数
 	TimerExecTotal = "chronoflow_timer_exec_total"
 	// TimerExecDuration 定时器执行耗时（直方图，毫秒）
 	TimerExecDuration = "chronoflow_timer_exec_duration_ms"
@@ -20,8 +20,6 @@ const (
 	TimerExecSuccess = "chronoflow_timer_exec_success_total"
 	// TimerExecFailed 定时器执行失败次数
 	TimerExecFailed = "chronoflow_timer_exec_failed_total"
-	// TimerExecRetry 定时器执行重试次数
-	TimerExecRetry = "chronoflow_timer_exec_retry_total"
 	// TimerTriggerTotal 定时器触发总次数
 	TimerTriggerTotal = "chronoflow_timer_trigger_total"
 	// TimerQueueSize 定时器队列当前大小
@@ -48,8 +46,6 @@ type Reporter struct {
 	execSuccess *prometheus.CounterVec
 	// execFailed 定时器执行失败次数
 	execFailed *prometheus.CounterVec
-	// execRetry 定时器执行重试次数
-	execRetry *prometheus.CounterVec
 	// triggerTotal 定时器触发总次数
 	triggerTotal *prometheus.CounterVec
 	// queueSize 定时器队列大小
@@ -69,7 +65,7 @@ func NewReporter() *Reporter {
 		reporterInstance = &Reporter{
 			execTotal: promauto.NewCounterVec(prometheus.CounterOpts{
 				Name: TimerExecTotal,
-				Help: "定时器执行总次数（含重试）",
+				Help: "定时器执行总次数",
 			}, []string{LabelTimerID, LabelApp}),
 
 			execDuration: promauto.NewHistogramVec(prometheus.HistogramOpts{
@@ -87,11 +83,6 @@ func NewReporter() *Reporter {
 				Name: TimerExecFailed,
 				Help: "定时器执行失败次数",
 			}, []string{LabelTimerID, LabelApp, LabelStatus}),
-
-			execRetry: promauto.NewCounterVec(prometheus.CounterOpts{
-				Name: TimerExecRetry,
-				Help: "定时器执行重试次数",
-			}, []string{LabelTimerID, LabelApp}),
 
 			triggerTotal: promauto.NewCounterVec(prometheus.CounterOpts{
 				Name: TimerTriggerTotal,
@@ -141,14 +132,6 @@ func (r *Reporter) ReportExecFailed(timerID int64, app, status string) {
 		LabelTimerID: formatID(timerID),
 		LabelApp:     app,
 		LabelStatus:  status,
-	}).Inc()
-}
-
-// ReportExecRetry 上报定时器执行重试
-func (r *Reporter) ReportExecRetry(timerID int64, app string) {
-	r.execRetry.With(prometheus.Labels{
-		LabelTimerID: formatID(timerID),
-		LabelApp:     app,
 	}).Inc()
 }
 

@@ -14,8 +14,6 @@ const (
 	RecordStatusSuccess RecordStatus = "SUCCESS"
 	// RecordStatusFailed 执行失败
 	RecordStatusFailed RecordStatus = "FAILED"
-	// RecordStatusRetrying 重试中
-	RecordStatusRetrying RecordStatus = "RETRYING"
 	// RecordStatusTimeout 执行超时
 	RecordStatusTimeout RecordStatus = "TIMEOUT"
 )
@@ -26,7 +24,6 @@ type TimerRecord struct {
 	TimerID       int64        `gorm:"index;not null;comment:定时器ID" json:"timer_id"`
 	TriggerTime   time.Time    `gorm:"index;not null;comment:执行时间" json:"trigger_time"`
 	Status        RecordStatus `gorm:"size:32;not null;default:PENDING;comment:执行状态" json:"status"`
-	RetryCount    int          `gorm:"default:0;comment:重试次数" json:"retry_count"`
 	RequestURL    string       `gorm:"size:512;comment:请求URL" json:"request_url"`
 	RequestMethod string       `gorm:"size:16;comment:请求方法" json:"request_method"`
 	RequestBody   string       `gorm:"type:text;comment:请求体" json:"request_body"`
@@ -36,7 +33,6 @@ type TimerRecord struct {
 	StartedAt     *time.Time   `gorm:"comment:开始时间" json:"started_at"`
 	FinishedAt    *time.Time   `gorm:"comment:完成时间" json:"finished_at"`
 	Duration      int64        `gorm:"comment:执行时长(毫秒)" json:"duration"`
-	NextRetryTime *time.Time   `gorm:"index;comment:下次重试时间" json:"next_retry_time"`
 	CreatedAt     time.Time    `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt     time.Time    `gorm:"autoUpdateTime" json:"updated_at"`
 }
@@ -51,14 +47,6 @@ func (r *TimerRecord) IsCompleted() bool {
 	return r.Status == RecordStatusSuccess ||
 		r.Status == RecordStatusFailed ||
 		r.Status == RecordStatusTimeout
-}
-
-// IsRetryable 判断记录是否可重试（未超过最大重试次数且状态允许重试）
-func (r *TimerRecord) IsRetryable(maxRetries int) bool {
-	if r.RetryCount >= maxRetries {
-		return false
-	}
-	return r.Status == RecordStatusFailed || r.Status == RecordStatusTimeout
 }
 
 // RecordListRequest 执行记录列表查询请求

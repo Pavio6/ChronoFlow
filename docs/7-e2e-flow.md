@@ -155,9 +155,11 @@ Scheduler.Run()
     ↓
 同时处理当前分钟和上一分钟，避免边界遗漏
     ↓
-遍历桶号 0 ~ bucket_num-1
+分别获取各分钟的动态分桶数（可能不同）
     ↓
-SETNX 抢锁（TTL = scan_interval * 2）
+遍历桶号 0 ~ bucketNum-1
+    ↓
+SETNX 抢锁（TTL = lock_expiration，默认 70s）
     ↓
 抢到锁 → 提交 Trigger 到协程池
 ```
@@ -178,15 +180,16 @@ Trigger.Run()
     ↓
 计算时间片结束时间（当前分钟的 :59）
     ↓
-循环: GetDueTasks(time_range, bucket)
+循环:
+    续期锁 TTL（success_expiration，默认 130s）
     ↓
-ZRANGEBYSCORE 获取 score <= now 的任务（只读不删）
+    GetDueTasks(time_range, bucket)
     ↓
-Redis 无结果 → 回退查询 MySQL（冷启动兜底）
+    ZRANGEBYSCORE 获取 score <= now 的任务（只读不删）
     ↓
-提交 Executor 到协程池
+    Redis 无结果 → 回退查询 MySQL（冷启动兜底）
     ↓
-续期锁 TTL
+    提交 Executor 到协程池
 ```
 
 ### 代码示例
@@ -196,10 +199,16 @@ Redis 无结果 → 回退查询 MySQL（冷启动兜底）
 func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketNum int) {
     timeSliceEnd := calculateTimeSliceEnd(timeRange)
     
+    // 锁续期时间，参考 xTimer successExpireSeconds
+    successExpiration := time.Duration(t.cfg.SuccessExpiration) * time.Second
+    
     for {
         if time.Now().After(timeSliceEnd) {
             break  // 时间片结束
         }
+        
+        // 每轮循环续期锁 TTL，防止空闲时锁过期
+        t.queue.ExtendSchedulerLock(ctx, timeRange, bucket, successExpiration)
         
         // 先查 Redis
         triggers, _ := t.queue.GetDueTasks(ctx, timeRange, bucket, batchSize)
@@ -214,9 +223,6 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
                 t.executor.Execute(ctx, trigger)
             })
         }
-        
-        // 续期锁
-        t.queue.ExtendSchedulerLock(ctx, timeRange, bucket, lockExpiration)
     }
 }
 ```
@@ -262,7 +268,6 @@ Executor.Execute(trigger)
 ```
 PENDING → RUNNING → SUCCESS（执行成功）
                   → FAILED（执行失败）
-                  → RETRYING（可重试，等待重试）
                   → TIMEOUT（执行超时）
 ```
 
@@ -281,13 +286,7 @@ PENDING → RUNNING → SUCCESS（执行成功）
         ↓                ↓                ↓
    ┌─────────┐     ┌─────────┐     ┌─────────┐
    │ SUCCESS │     │ FAILED  │     │ TIMEOUT │
-   └─────────┘     └────┬────┘     └─────────┘
-                        ↓
-                   ┌─────────┐
-                   │ RETRYING│ ←── 重试次数 < max_retries
-                   └────┬────┘
-                        ↓
-                   (重新执行)
+   └─────────┘     └─────────┘     └─────────┘
 ```
 
 ## 7. 完成后处理
@@ -301,7 +300,7 @@ record.ResponseCode = responseCode
 record.ResponseBody = responseBody
 recRepo.Update(record)
 
-// 设置幂等标记（仅成功时写入，防止失败任务被标记导致无法重试）
+// 设置幂等标记
 bloom.Set(ctx, bloomKey, bloomVal, 86400)  // Bloom Filter，24 小时过期
 ```
 
@@ -310,14 +309,6 @@ bloom.Set(ctx, bloomKey, bloomVal, 86400)  // Bloom Filter，24 小时过期
 ```go
 record.Status = model.RecordStatusFailed
 record.ErrorMessage = err.Error()
-
-// 检查是否可重试
-if record.IsRetryable(maxRetries) {
-    record.Status = model.RecordStatusRetrying
-    record.RetryCount++
-    nextRetryTime := retryCalc.CalculateNextRetryTime(record.RetryCount)
-    record.NextRetryTime = &nextRetryTime
-}
 ```
 
 ## 数据存储总结
@@ -325,7 +316,7 @@ if record.IsRetryable(maxRetries) {
 | 存储 | 数据内容 | 用途 |
 |------|----------|------|
 | MySQL timer_definitions | 定时器定义（Cron 表达式、回调地址等） | 定时器配置持久化 |
-| MySQL timer_records | 执行记录（触发时间、状态、结果等） | 执行历史、重试管理 |
+| MySQL timer_records | 执行记录（触发时间、状态、结果等） | 执行历史 |
 | Redis ZSet | 待执行任务（score = 触发时间） | 高效任务调度 |
 | Redis Lock | 分布式锁（time_range + bucket） | 防止重复调度 |
 | Redis Bloom | 已执行任务标记 | 快速幂等检查 |

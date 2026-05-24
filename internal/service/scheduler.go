@@ -17,8 +17,8 @@ import (
 // 抢到锁后从协程池提交 Trigger 协程处理该分片
 // 核心流程：
 //  1. 计算当前分钟级时间范围 time_range
-//  2. 遍历桶号 0 ~ bucketNum-1
-//  3. 对每个桶尝试 SETNX 抢锁，TTL < 时间片时长
+//  2. 分别获取当前分钟和上一分钟的动态分桶数
+//  3. 对每个桶尝试 SETNX 抢锁，TTL 由 lock_expiration 配置（默认 70 秒，大于时间片时长）
 //  4. 抢到锁 → 从协程池提交 Trigger 协程
 type Scheduler struct {
 	queue   *redis.RedisQueue
@@ -83,25 +83,36 @@ func (s *Scheduler) schedule(ctx context.Context) {
 	currentTimeRange := formatTimeRange(now)
 	prevTimeRange := formatTimeRange(now.Add(-time.Minute))
 
-	// 从 Redis 获取动态分桶数，如果不存在则使用配置中的默认值
-	bucketNum, err := s.queue.GetBucketNum(ctx, currentTimeRange, s.cfg.BucketNum)
+	// 从 Redis 获取当前分钟的动态分桶数
+	currentBucketNum, err := s.queue.GetBucketNum(ctx, currentTimeRange, s.cfg.BucketNum)
 	if err != nil {
-		logger.Error("Scheduler 获取动态分桶数失败，使用默认值",
+		logger.Error("Scheduler 获取当前分钟动态分桶数失败，使用默认值",
 			zap.String("time_range", currentTimeRange),
 			zap.Error(err),
 		)
-		bucketNum = s.cfg.BucketNum
+		currentBucketNum = s.cfg.BucketNum
 	}
 
-	// 锁的过期时间设为 scan_interval 的 2 倍，防止锁提前过期
-	lockExpiration := time.Duration(s.cfg.ScanInterval*2) * time.Second
+	// 从 Redis 获取上一分钟的动态分桶数（可能与当前分钟不同）
+	prevBucketNum, err := s.queue.GetBucketNum(ctx, prevTimeRange, s.cfg.BucketNum)
+	if err != nil {
+		logger.Error("Scheduler 获取上一分钟动态分桶数失败，使用默认值",
+			zap.String("time_range", prevTimeRange),
+			zap.Error(err),
+		)
+		prevBucketNum = s.cfg.BucketNum
+	}
 
-	// 遍历每个桶，同时处理当前分钟和上一分钟
-	for bucket := 0; bucket < bucketNum; bucket++ {
-		// 处理当前分钟
-		s.handleSlice(ctx, currentTimeRange, bucket, bucketNum, lockExpiration)
-		// 处理上一分钟，避免边界任务遗漏
-		s.handleSlice(ctx, prevTimeRange, bucket, bucketNum, lockExpiration)
+	// 锁的初始 TTL，参考 xTimer tryLockSeconds（必须大于时间片时长 60 秒）
+	lockExpiration := time.Duration(s.cfg.LockExpiration) * time.Second
+
+	// 处理当前分钟
+	for bucket := 0; bucket < currentBucketNum; bucket++ {
+		s.handleSlice(ctx, currentTimeRange, bucket, currentBucketNum, lockExpiration)
+	}
+	// 处理上一分钟，避免边界任务遗漏
+	for bucket := 0; bucket < prevBucketNum; bucket++ {
+		s.handleSlice(ctx, prevTimeRange, bucket, prevBucketNum, lockExpiration)
 	}
 }
 

@@ -27,6 +27,10 @@ scheduler:
   bucket_num: 3
   # Scheduler 轮询间隔（秒）
   scan_interval: 1
+  # 分布式锁初始 TTL（秒），必须大于时间片时长（60 秒），参考 xTimer tryLockSeconds
+  lock_expiration: 70
+  # 任务处理完成后锁的 TTL（秒），防止过期释放，参考 xTimer successExpireSeconds
+  success_expiration: 130
 
 executor:
   # HTTP 回调超时（秒）

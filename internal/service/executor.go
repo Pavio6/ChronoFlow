@@ -14,7 +14,6 @@ import (
 	"github.com/chronoflow/internal/pkg/memory"
 	"github.com/chronoflow/internal/pkg/metrics"
 	"github.com/chronoflow/internal/pkg/redis"
-	"github.com/chronoflow/internal/pkg/retry"
 	"github.com/chronoflow/internal/repository"
 	"github.com/chronoflow/pkg/logger"
 	"go.uber.org/zap"
@@ -27,14 +26,13 @@ import (
 //  2. 若命中，查 MySQL 记录状态确认
 //  3. 查询定时器定义（先内存缓存，miss 再 MySQL）
 //  4. 执行 HTTP 回调
-//  5. 执行成功 → Bloom Filter 打点（仅成功时写入，失败任务可重试）
+//  5. 执行成功 → Bloom Filter 打点
 //  6. 更新 MySQL 执行记录状态
 type Executor struct {
 	defRepo    repository.TimerDefinitionRepository
 	recRepo    repository.TimerRecordRepository
 	bloom      *bloom.Filter
 	cache      *memory.TimerCache
-	retryCalc  *retry.Calculator
 	reporter   *metrics.Reporter
 	httpClient *http.Client
 	cfg        *config.ExecutorConfig
@@ -46,7 +44,6 @@ func NewExecutor(
 	recRepo repository.TimerRecordRepository,
 	bloom *bloom.Filter,
 	cache *memory.TimerCache,
-	retryCalc *retry.Calculator,
 	reporter *metrics.Reporter,
 	cfg *config.ExecutorConfig,
 ) *Executor {
@@ -60,7 +57,6 @@ func NewExecutor(
 		recRepo:    recRepo,
 		bloom:      bloom,
 		cache:      cache,
-		retryCalc:  retryCalc,
 		reporter:   reporter,
 		httpClient: httpClient,
 		cfg:        cfg,
@@ -164,23 +160,6 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 		// 执行失败
 		record.Status = model.RecordStatusFailed
 		record.ErrorMessage = err.Error()
-
-		// 检查是否可重试
-		if record.IsRetryable(e.cfg.MaxRetries) {
-			record.Status = model.RecordStatusRetrying
-			record.RetryCount++
-			nextRetryTime := e.retryCalc.CalculateNextRetryTime(record.RetryCount)
-			record.NextRetryTime = &nextRetryTime
-
-			// 上报重试指标
-			e.reporter.ReportExecRetry(timerID, def.App)
-
-			logger.Info("Executor 任务将重试",
-				zap.Int64("timer_id", timerID),
-				zap.Int("retry_count", record.RetryCount),
-				zap.Time("next_retry_time", nextRetryTime),
-			)
-		}
 
 		// 上报失败指标
 		e.reporter.ReportExecFailed(timerID, def.App, "error")

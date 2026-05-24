@@ -23,8 +23,6 @@ type TimerRecordRepository interface {
 	List(req *model.RecordListRequest) ([]*model.TimerRecord, int64, error)
 	// GetByTimerID 根据定时器 ID 获取最近的执行记录
 	GetByTimerID(timerID int64, limit int) ([]*model.TimerRecord, error)
-	// GetPendingRetries 获取待重试的执行记录（状态为 FAILED 且下次重试时间已到）
-	GetPendingRetries() ([]*model.TimerRecord, error)
 	// GetRunningRecords 获取超时的正在执行的记录（状态为 RUNNING 且执行时间超过指定时长）
 	GetRunningRecords(timeout time.Duration) ([]*model.TimerRecord, error)
 	// UpdateStatus 更新执行记录状态
@@ -136,20 +134,6 @@ func (r *timerRecordRepo) GetByTimerID(timerID int64, limit int) ([]*model.Timer
 		Find(&items).Error
 	if err != nil {
 		return nil, fmt.Errorf("查询定时器执行记录失败: %w", err)
-	}
-	return items, nil
-}
-
-// GetPendingRetries 获取待重试的执行记录
-// 查询条件：状态为 FAILED 且下次重试时间小于等于当前时间
-func (r *timerRecordRepo) GetPendingRetries() ([]*model.TimerRecord, error) {
-	var items []*model.TimerRecord
-	now := time.Now()
-	err := r.db.Where("status = ? AND next_retry_time <= ?", model.RecordStatusFailed, now).
-		Order("next_retry_time ASC").
-		Find(&items).Error
-	if err != nil {
-		return nil, fmt.Errorf("查询待重试记录失败: %w", err)
 	}
 	return items, nil
 }
