@@ -9,7 +9,7 @@
 | **时间分片** | 按分钟级时间范围切分 Redis ZSet，减少单次查询量 |
 | **分桶并发** | 按 `timer_id % bucket_num` 分桶，每桶独立 goroutine 并发处理 |
 | **三级存储** | MySQL → Redis ZSet → 节点内存缓存，逐级加速 |
-| **三层幂等** | Bloom Filter → Redis SETNX → MySQL 查重，防止重复执行 |
+| **两层幂等** | Bloom Filter → MySQL 查重，防止重复执行 |
 | **分布式锁** | Scheduler 对每个分片 SETNX 抢锁，多实例互斥 |
 | **指数退避** | 失败重试 10s → 30s → 60s，避免无效重试风暴 |
 | **协程池** | ants 协程池控制并发数，防止资源耗尽 |
@@ -70,29 +70,34 @@ graph TB
 graph TD
     A["定时器创建"] --> B["定义存 MySQL<br/>(status=INACTIVE)"]
     B --> C["定时器激活"]
-    C --> D["Migrator 批量预创建未来 step1 的定时任务"]
+    C --> D["Migrator 批量预创建定时任务"]
     D --> E["定时任务存 MySQL + Redis ZSet<br/>(按分片分桶)"]
     
     F["每 1s Scheduler 轮询"] --> G["计算当前 time_range"]
-    G --> H["遍历每个桶，抢分布式锁"]
+    G --> G2["同时处理当前分钟和上一分钟"]
+    G2 --> H["遍历每个桶，抢分布式锁"]
     H --> I{"抢到锁?"}
     I -->|是| J["从协程池提交 Trigger"]
     
     J --> K["在时间片内轮询 Redis ZSet<br/>{time_range}:{bucket}"]
     K --> L["ZRANGEBYSCORE 取到期任务"]
-    L --> M["从协程池提交 Executor"]
+    L --> L2{"Redis 有结果?"}
+    L2 -->|否| L3["回退查询 MySQL（冷启动兜底）"]
+    L3 --> M
+    L2 -->|是| M["从协程池提交 Executor"]
     M --> N["完成后更新锁 TTL"]
     
     M --> O["bloom filter 查重"]
     O --> P{"bloom 命中?"}
-    P -->|是| Q["Redis 幂等键检查"]
-    Q --> R{"Redis 命中?"}
-    R -->|是| S["MySQL 查重"]
+    P -->|是| Q["MySQL 查记录状态"]
+    Q --> R{"status != PENDING?"}
+    R -->|是| S["跳过（已执行）"]
     P -->|否| T["执行 HTTP 回调"]
     R -->|否| T
-    S --> T
-    T --> U["bloom filter 打点 + Redis 幂等键设置"]
-    U --> V["更新 MySQL 记录状态"]
+    T --> U{"执行成功?"}
+    U -->|是| W["bloom filter 打点"]
+    W --> V["更新 MySQL 记录状态"]
+    U -->|否| V
 ```
 
 ## 项目结构
@@ -362,7 +367,6 @@ PORT=8081 go run cmd/server/main.go
 |------|----------|------|
 | 任务队列 | `chronoflow:timer:{YYYY-MM-DD-HH:mm}:{bucket}` | ZSet |
 | Scheduler 锁 | `chronoflow:scheduler_lock:{time_range}:{bucket}` | String (SETNX) |
-| 幂等键 | `chronoflow:idempotent:{timer_id}:{trigger_time_ms}` | String (SETNX) |
 | 布隆过滤器 | `chronoflow:bloom:{date}` | String (bitmap) |
 
 ## 定时器状态流转

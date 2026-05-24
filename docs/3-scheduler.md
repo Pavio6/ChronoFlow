@@ -24,23 +24,36 @@ Migrator ──[协程池]──→ Scheduler ──[协程池]──→ Trigger
 ### 执行时机
 
 ```
-启动时立即执行一次 → 每隔 step1_duration（默认 60 分钟）执行
+等待第一次 ticker 触发 → 每隔 step1_duration（默认 60 分钟）执行
 ```
+
+启动时不立即执行，冷启动期间的任务由 Trigger 的 DB 回退机制兜底。
 
 ### 关键代码
 
 ```go
+func (m *Migrator) Start(ctx context.Context) {
+    // 不立即执行，等第一次 ticker
+    ticker := time.NewTicker(time.Duration(m.cfg.MigrateStepMinutes) * time.Minute)
+    defer ticker.Stop()
+
+    for range ticker.C {
+        m.doMigrate(ctx)
+    }
+}
+
 func (m *Migrator) doMigrate(ctx context.Context) {
     // 1. 查询所有 ACTIVE 定时器
     definitions, _ := m.defRepo.GetActiveDefinitions()
     
-    // 2. 计算时间范围
+    // 2. 计算时间范围（小时级取整）
     now := time.Now()
-    endTime := now.Add(time.Duration(m.cfg.Step1Duration) * time.Second)
+    startTime := getStartHour(now.Add(time.Duration(m.cfg.MigrateStepMinutes) * time.Minute))
+    endTime := getStartHour(now.Add(time.Duration(m.cfg.MigrateStepMinutes*2) * time.Minute))
     
     for _, def := range definitions {
         // 3. 解析触发时间点
-        triggerTimes, _ := m.parser.NextNTriggerTimes(def.CronExpr, now, maxTriggers)
+        triggerTimes, _ := m.parser.NextTriggerTimesBefore(def.CronExpr, startTime, endTime)
         
         for _, triggerTime := range triggerTimes {
             // 4. 幂等检查
@@ -52,11 +65,16 @@ func (m *Migrator) doMigrate(ctx context.Context) {
             m.recRepo.Create(&model.TimerRecord{...})
             
             // 6. 推入 Redis
-            bucket := int(def.ID) % m.cfg.BucketNum
+            bucket := int(def.ID) % bucketNum
             timeRange := formatTimeRange(triggerTime)
             m.queue.PushTask(ctx, timeRange, bucket, &redis.TaskTrigger{...})
         }
     }
+}
+
+// getStartHour 将时间取整到小时
+func getStartHour(t time.Time) time.Time {
+    return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location())
 }
 ```
 
@@ -88,19 +106,26 @@ bucket = timer_id % bucket_num
 ```go
 func (s *Scheduler) schedule(ctx context.Context) {
     now := time.Now()
-    timeRange := formatTimeRange(now)
+    
+    // 同时处理当前分钟和上一分钟，避免边界任务遗漏
+    currentTimeRange := formatTimeRange(now)
+    prevTimeRange := formatTimeRange(now.Add(-time.Minute))
+    
+    bucketNum, _ := s.queue.GetBucketNum(ctx, currentTimeRange, s.cfg.BucketNum)
     lockExpiration := time.Duration(s.cfg.ScanInterval*2) * time.Second
     
-    for bucket := 0; bucket < s.cfg.BucketNum; bucket++ {
-        // 尝试获取分布式锁
-        acquired, _ := s.queue.AcquireSchedulerLock(ctx, timeRange, bucket, lockExpiration)
-        
-        if acquired {
-            // 提交 Trigger 到协程池
-            s.pool.Submit(func() {
-                s.trigger.Run(ctx, timeRange, bucket)
-            })
-        }
+    for bucket := 0; bucket < bucketNum; bucket++ {
+        s.handleSlice(ctx, currentTimeRange, bucket, bucketNum, lockExpiration)
+        s.handleSlice(ctx, prevTimeRange, bucket, bucketNum, lockExpiration)
+    }
+}
+
+func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket int, bucketNum int, lockExpiration time.Duration) {
+    acquired, _ := s.queue.AcquireSchedulerLock(ctx, timeRange, bucket, lockExpiration)
+    if acquired {
+        s.pool.Submit(func() {
+            s.trigger.Run(ctx, timeRange, bucket, bucketNum)
+        })
     }
 }
 ```
@@ -120,22 +145,27 @@ func (s *Scheduler) schedule(ctx context.Context) {
 ### 核心职责
 
 - 在时间片内持续轮询 Redis ZSet
-- 原子弹出到期任务
+- Redis 无结果时回退查询 MySQL（冷启动兜底）
 - 提交 Executor 到协程池
 - 续期锁 TTL
 
 ### 执行流程
 
 ```go
-func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int) {
+func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketNum int) {
     timeSliceEnd := calculateTimeSliceEnd(timeRange)
     
     for {
         // 检查时间片是否结束
         if time.Now().After(timeSliceEnd) { break }
         
-        // 原子弹出到期任务
-        triggers, _ := t.queue.PopDueTasks(ctx, timeRange, bucket, batchSize)
+        // 从 Redis 获取到期任务
+        triggers, _ := t.queue.GetDueTasks(ctx, timeRange, bucket, batchSize)
+        
+        // Redis 无结果时，回退查询 MySQL（冷启动兜底）
+        if len(triggers) == 0 {
+            triggers, _ = t.getDueTasksFromDB(ctx, timeRange, bucket, bucketNum)
+        }
         
         if len(triggers) == 0 {
             time.Sleep(500 * time.Millisecond) // 无任务时短暂等待
@@ -152,6 +182,26 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int) {
         // 续期锁
         t.queue.ExtendSchedulerLock(ctx, timeRange, bucket, lockTTL)
     }
+}
+
+// getDueTasksFromDB DB 回退：查询 MySQL 中 PENDING 状态的记录
+func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucket int, bucketNum int) ([]*redis.TaskTrigger, error) {
+    start, _ := time.Parse("2006-01-02-15:04", timeRange)
+    end := start.Add(time.Minute)
+    
+    records, _ := t.recRepo.GetPendingByTimeRange(start, end)
+    
+    var triggers []*redis.TaskTrigger
+    for _, record := range records {
+        if int(record.TimerID)%bucketNum != bucket {
+            continue
+        }
+        triggers = append(triggers, &redis.TaskTrigger{
+            TimerID:     record.TimerID,
+            TriggerTime: record.TriggerTime,
+        })
+    }
+    return triggers, nil
 }
 ```
 
@@ -171,7 +221,7 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int) {
 
 ### 核心职责
 
-- 三层幂等去重
+- 两层幂等去重
 - 查询定时器定义
 - 执行 HTTP 回调
 - 更新执行记录状态
@@ -182,11 +232,9 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int) {
 ```
 1. Bloom Filter 查重
    ├─ miss → 继续执行
-   └─ hit → Redis 幂等键检查
-            ├─ miss → 执行（bloom 误判）
-            └─ hit → MySQL 查重
-                     ├─ 已执行 → 跳过
-                     └─ 未执行 → 执行
+   └─ hit → MySQL 查记录状态
+            ├─ status != PENDING → 跳过（已执行）
+            └─ status == PENDING → 执行（bloom 误判）
 
 2. 查询定时器定义
    ├─ 内存缓存命中 → 直接使用
@@ -203,8 +251,7 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int) {
             └─ 不可重试 → 标记为 FAILED
 
 5. 后处理
-   - Bloom Filter 打点
-   - Redis 幂等键设置
+   - 执行成功 → Bloom Filter 打点（仅成功时写入）
    - 更新 MySQL 记录
    - 上报 Prometheus 指标
 ```

@@ -62,7 +62,7 @@ Trigger 开始处理
 
 ## 幂等控制
 
-### 三层幂等架构
+### 两层幂等架构
 
 ```
 请求到达
@@ -75,14 +75,8 @@ Trigger 开始处理
          │ hit
          ▼
 ┌─────────────────┐
-│  Redis SETNX    │ ← 第二层：精确判断
-│  (幂等键)       │    无误判
-└────────┬────────┘
-         │ hit
-         ▼
-┌─────────────────┐
-│  MySQL 查询     │ ← 第三层：最终确认
-│  (执行记录表)    │    无误判
+│  MySQL 查询     │ ← 第二层：最终确认
+│  (执行记录表)    │    查记录状态 status != PENDING
 └─────────────────┘
          │
          ▼
@@ -127,20 +121,6 @@ func (f *Filter) Set(ctx context.Context, key, val string, expireSeconds int64) 
 
 **过期时间**：24 小时（自动清理历史数据）
 
-### Redis 幂等键
-
-```go
-// 设置幂等键（SETNX）
-func (q *RedisQueue) SetIdempotentKey(ctx context.Context, timerID int64, triggerTime time.Time, expiration time.Duration) (bool, error) {
-    key := fmt.Sprintf("chronoflow:idempotent:%d:%d", timerID, triggerTime.UnixMilli())
-    return q.client.SetNX(ctx, key, "1", expiration).Result()
-}
-```
-
-**Key 格式**：`chronoflow:idempotent:{timer_id}:{trigger_time_ms}`
-
-**过期时间**：24 小时
-
 ### MySQL 查重
 
 ```go
@@ -155,13 +135,12 @@ func (r *timerRecordRepo) ExistsByTimerIDAndTriggerTime(timerID int64, triggerTi
 
 查询条件：同一 `timer_id` + `trigger_time` 且状态不是 PENDING 的记录。
 
-### 三层幂等的性能分析
+### 两层幂等的性能分析
 
-| 场景 | Bloom Filter | Redis | MySQL | 总延迟 |
-|------|-------------|-------|-------|--------|
-| 首次执行 | miss → 执行 | - | - | ~0.1ms |
-| 重复执行（99%） | hit → 跳过 | - | - | ~0.1ms |
-| 重复执行（1%误判） | hit → Redis 检查 | hit → 跳过 | - | ~0.5ms |
-| 重复执行（极罕见） | hit → Redis 检查 | hit → MySQL 确认 | hit → 跳过 | ~2ms |
+| 场景 | Bloom Filter | MySQL | 总延迟 |
+|------|-------------|-------|--------|
+| 首次执行 | miss → 执行 | - | ~0.1ms |
+| 重复执行（99%） | hit → 跳过 | - | ~0.1ms |
+| 重复执行（1% 误判） | hit → MySQL 确认 | hit → 跳过 | ~2ms |
 
-99% 的重复任务在 Bloom Filter 层就被拦截，1% 穿透到 Redis，极少数穿透到 MySQL。
+99% 的重复任务在 Bloom Filter 层就被拦截，1% 穿透到 MySQL。
