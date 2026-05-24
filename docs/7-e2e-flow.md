@@ -64,7 +64,7 @@ TimerService.Activate()
     ↓
 状态机验证
     ↓
-计算时间窗口：now ~ now + step1_duration*2
+计算时间窗口：now ~ now + migrate_step_minutes*2
     ↓
 解析 Cron 表达式，计算触发时间点
     ↓
@@ -320,4 +320,3 @@ record.ErrorMessage = err.Error()
 | Redis ZSet | 待执行任务（score = 触发时间） | 高效任务调度 |
 | Redis Lock | 分布式锁（time_range + bucket） | 防止重复调度 |
 | Redis Bloom | 已执行任务标记 | 快速幂等检查 |
-| Redis Idempotent | 幂等键（timer_id + trigger_time） | 精确幂等检查 |

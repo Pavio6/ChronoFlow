@@ -89,7 +89,7 @@ const Monitoring: React.FC = () => {
         <div>
           <span className="monitor-kicker">Prometheus exporter</span>
           <h2>{summary.exporter}</h2>
-          <p>当前页面展示后端聚合后的运行快照，每 10 秒自动刷新。</p>
+          <p>当前页面展示后端聚合后的进程运行快照，每 10 秒自动刷新；长期趋势请接入 Prometheus。</p>
         </div>
         <Space>
           <Tag color="default">{summary.runtime.last_collected_msg}</Tag>

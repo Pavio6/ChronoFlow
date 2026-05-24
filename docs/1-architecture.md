@@ -33,11 +33,11 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 
 **职责**：将 MySQL 中的定时器定义批量预创建为执行记录，并推送到 Redis ZSet 队列。
 
-**触发时机**：每隔 `step1_duration`（默认 60 分钟）执行一次。启动时不立即执行，等第一次 ticker 触发；冷启动期间的任务由 Trigger 的 DB 回退机制兜底。
+**触发时机**：每隔 `migrate_step_minutes`（默认 60 分钟）执行一次。启动时不立即执行，等第一次 ticker 触发；冷启动期间的任务由 Trigger 的 DB 回退机制兜底。
 
 **核心流程**：
 1. 全量扫描 `timer_definitions` 表中 `status = ACTIVE` 的记录
-2. 对每个定时器，用 Cron 解析器计算未来 `step1_duration` 内的所有触发时间点
+2. 对每个定时器，用 Cron 解析器计算未来 `migrate_step_minutes` 内的所有触发时间点
 3. 时间窗口使用小时级取整：`start = GetStartHour(now + step)`, `end = GetStartHour(now + 2*step)`
 4. 幂等检查：跳过已存在的记录（`timer_id + trigger_time` 唯一）
 5. 批量插入 `timer_records` 表

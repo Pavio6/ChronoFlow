@@ -16,20 +16,21 @@ import (
 
 // Migrator 数据迁移器
 // 负责将 MySQL 中的定时器定义批量预创建为定时任务记录，并推送到 Redis ZSet 队列
-// 执行时机：每隔 step1_duration 触发一次（启动时不立即执行，等第一次 ticker）
+// 执行时机：每隔 migrate_step_minutes 触发一次（启动时不立即执行，等第一次 ticker）
 // 核心流程：
 //  1. 全量扫描 MySQL 中 ACTIVE 状态的定时器定义
 //  2. 以小时级精度计算下一个 step1 时间范围内的所有触发时间点
 //  3. 批量插入 timer_records 到 MySQL
 //  4. 按 {time_range}:{bucket} 分组批量 ZAdd 到 Redis
+//
 // 冷启动覆盖：启动后第一个 step1 时间窗口内的任务由 Trigger 的 DB 回退机制处理
 type Migrator struct {
-	defRepo  repository.TimerDefinitionRepository
-	recRepo  repository.TimerRecordRepository
-	queue    *redis.RedisQueue
-	parser   *cron.CronParser
-	cfg      *config.SchedulerConfig
-	quit     chan struct{}
+	defRepo repository.TimerDefinitionRepository
+	recRepo repository.TimerRecordRepository
+	queue   *redis.RedisQueue
+	parser  *cron.CronParser
+	cfg     *config.SchedulerConfig
+	quit    chan struct{}
 }
 
 // NewMigrator 创建迁移器实例
@@ -51,7 +52,7 @@ func NewMigrator(
 }
 
 // Start 启动迁移器
-// 等待第一次 ticker 触发后执行，然后每隔 step1_duration 定时执行
+// 等待第一次 ticker 触发后执行，然后每隔 migrate_step_minutes 定时执行
 // 冷启动期间的任务由 Trigger 的 DB 回退机制兜底
 func (m *Migrator) Start(ctx context.Context) {
 	logger.Info("Migrator 启动",

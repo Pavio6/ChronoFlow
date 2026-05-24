@@ -189,7 +189,7 @@ func (r *Reporter) Snapshot() Snapshot {
 		TriggerTotal:     r.triggerTotalCount.Load(),
 		AvgDurationMs:    avgDuration,
 		SuccessRate:      successRate,
-		LastCollectedMsg: "process-local",
+		LastCollectedMsg: "runtime snapshot",
 	}
 }
 

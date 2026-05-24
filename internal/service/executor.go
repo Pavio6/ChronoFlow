@@ -3,8 +3,10 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -158,8 +160,11 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 
 	// 根据执行结果更新记录状态
 	if err != nil {
-		// 执行失败
-		record.Status = model.RecordStatusFailed
+		if isTimeoutError(err) {
+			record.Status = model.RecordStatusTimeout
+		} else {
+			record.Status = model.RecordStatusFailed
+		}
 		record.ErrorMessage = err.Error()
 
 		// 上报失败指标
@@ -205,6 +210,14 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 	// 上报执行指标
 	e.reporter.ReportExecRecord(timerID, def.App)
 	e.reporter.ReportExecDuration(timerID, def.App, float64(execDuration.Milliseconds()))
+}
+
+func isTimeoutError(err error) bool {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 // getTimerDefinition 获取定时器定义（先内存缓存，miss 再 MySQL）

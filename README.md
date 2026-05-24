@@ -22,7 +22,7 @@
 | Web 框架 | Gin |
 | ORM | GORM |
 | 数据库 | MySQL 8.0 |
-| 缓存与队列 | Redis 7（ZSet + Lua 脚本） |
+| 缓存与队列 | Redis 7（ZSet + SETNX 锁 + Bitmap） |
 | Cron 解析 | robfig/cron/v3 |
 | 日志 | zap |
 | 配置 | viper |
@@ -133,7 +133,7 @@ ChronoFlow/
 │       ├── memory/cache.go               # 内存定时器缓存
 │       ├── metrics/reporter.go           # Prometheus 指标上报
 │       ├── pool/pool.go                  # ants 协程池
-│       └── redis/queue.go                # Redis ZSet 队列 + Lua + 锁
+│       └── redis/queue.go                # Redis ZSet 队列 + SETNX 锁
 ├── pkg/logger/logger.go                  # zap 日志封装
 ├── web/                                  # React 前端
 ├── tests/callback-server/main.go         # 测试回调服务
@@ -324,7 +324,7 @@ PORT=8081 go run cmd/server/main.go
 
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
-| `scheduler.step1_duration` | 3600 | 一级迁移时间步（秒），Migrator 预创建范围 |
+| `scheduler.migrate_step_minutes` | 60 | Migrator 执行间隔（分钟） |
 | `scheduler.step2_duration` | 300 | 二级迁移时间步（秒），内存缓存刷新间隔 |
 | `scheduler.bucket_num` | 3 | 分桶数量 |
 | `scheduler.scan_interval` | 1 | Scheduler 轮询间隔（秒） |

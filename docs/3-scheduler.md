@@ -24,7 +24,7 @@ Migrator ──[协程池]──→ Scheduler ──[协程池]──→ Trigger
 ### 执行时机
 
 ```
-等待第一次 ticker 触发 → 每隔 step1_duration（默认 60 分钟）执行
+等待第一次 ticker 触发 → 每隔 migrate_step_minutes（默认 60 分钟）执行
 ```
 
 启动时不立即执行，冷启动期间的任务由 Trigger 的 DB 回退机制兜底。

@@ -19,8 +19,8 @@ redis:
   pool_size: 100
 
 scheduler:
-  # 一级时间步（秒），Migrator 批量预创建的时间范围，默认 60 分钟
-  step1_duration: 3600
+  # Migrator 执行间隔（分钟），默认 60 分钟
+  migrate_step_minutes: 60
   # 二级时间步（秒），内存缓存刷新间隔，默认 5 分钟
   step2_duration: 300
   # 分桶数量（支持动态调整）

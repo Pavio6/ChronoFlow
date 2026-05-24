@@ -190,14 +190,3 @@ func (s *Scheduler) hasSliceWork(ctx context.Context, timeRange string, bucket i
 	}
 	return s.recRepo.HasPendingByTimeRangeAndBucket(start, start.Add(time.Minute), bucket, bucketNum)
 }
-
-// formatTimeRange 格式化时间范围标识（分钟级精度）
-// 格式：YYYY-MM-DD-HH:mm
-func formatTimeRangeForScheduler(t time.Time) string {
-	return t.Format("2006-01-02-15:04")
-}
-
-// buildQueueKeyDebug 构建队列 key 的调试信息
-func buildQueueKeyDebug(timeRange string, bucket int) string {
-	return fmt.Sprintf("%s%s:%d", redis.TaskQueuePrefix, timeRange, bucket)
-}

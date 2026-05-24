@@ -18,11 +18,11 @@ import (
 // TimerService 定时器业务逻辑层
 // 封装定时器定义的 CRUD 操作和状态管理
 type TimerService struct {
-	defRepo    repository.TimerDefinitionRepository
-	recRepo    repository.TimerRecordRepository
-	parser     *cron.CronParser
-	queue      *redis.RedisQueue
-	schedCfg   *config.SchedulerConfig
+	defRepo  repository.TimerDefinitionRepository
+	recRepo  repository.TimerRecordRepository
+	parser   *cron.CronParser
+	queue    *redis.RedisQueue
+	schedCfg *config.SchedulerConfig
 }
 
 // NewTimerService 创建定时器服务实例
@@ -175,7 +175,7 @@ func (s *TimerService) List(req *model.TimerDefinitionListRequest) (*model.Timer
 
 // Activate 激活定时器
 // 状态转换：INACTIVE -> ACTIVE
-// 激活时立即同步未来 step1_duration*2 时间窗口内的任务到 Redis
+// 激活时立即同步未来 migrate_step_minutes*2 时间窗口内的任务到 Redis
 func (s *TimerService) Activate(id int64) error {
 	def, err := s.defRepo.GetByID(id)
 	if err != nil {
