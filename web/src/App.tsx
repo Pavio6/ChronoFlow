@@ -9,7 +9,14 @@ import ExecutionList from './pages/ExecutionList';
 
 const App: React.FC = () => {
   return (
-    <ConfigProvider locale={zhCN}>
+    <ConfigProvider
+      locale={zhCN}
+      theme={{
+        token: {
+          borderRadius: 4,
+        },
+      }}
+    >
       <BrowserRouter>
         <Routes>
           <Route path="/" element={<MainLayout />}>

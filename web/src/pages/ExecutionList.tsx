@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Table,
   Tag,
@@ -9,127 +9,131 @@ import {
   Tooltip,
   Modal,
   Descriptions,
+  Empty,
+  Card,
+  Row,
+  Col,
+  Statistic,
 } from 'antd';
-import { ReloadOutlined, EyeOutlined } from '@ant-design/icons';
+import {
+  ReloadOutlined,
+  EyeOutlined,
+  CheckCircleOutlined,
+  CloseCircleOutlined,
+  SyncOutlined,
+  ClockCircleOutlined,
+} from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { TimerRecord, RecordStatus, RecordListParams } from '../types';
 import { getRecords } from '../api/executions';
 import { RECORD_STATUS_CONFIG } from '../utils/constants';
 
+const statusIcon: Record<string, React.ReactNode> = {
+  SUCCESS: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
+  FAILED: <CloseCircleOutlined style={{ color: '#cf1322' }} />,
+  RUNNING: <SyncOutlined spin style={{ color: '#1677ff' }} />,
+  PENDING: <ClockCircleOutlined style={{ color: '#8c8c8c' }} />,
+  RETRYING: <SyncOutlined style={{ color: '#d48806' }} />,
+};
+
 const ExecutionList: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [records, setRecords] = useState<TimerRecord[]>([]);
   const [total, setTotal] = useState(0);
-  const [params, setParams] = useState<RecordListParams>({
-    page: 1,
-    page_size: 10,
-  });
+  const [params, setParams] = useState<RecordListParams>({ page: 1, page_size: 10 });
   const [detailVisible, setDetailVisible] = useState(false);
-  const [selectedRecord, setSelectedRecord] = useState<TimerRecord | null>(null);
+  const [selected, setSelected] = useState<TimerRecord | null>(null);
+  const [stats, setStats] = useState({ total: 0, success: 0, failed: 0, running: 0 });
 
-  // 加载执行记录列表
-  const loadRecords = async () => {
+  const loadRecords = useCallback(async () => {
     setLoading(true);
     try {
       const res = await getRecords(params);
-      setRecords(res.items || []);
+      const items = res.items || [];
+      setRecords(items);
       setTotal(res.total);
-    } catch (error: any) {
-      message.error(error.message || '加载失败');
+      setStats({
+        total: res.total,
+        success: items.filter(r => r.status === 'SUCCESS').length,
+        failed: items.filter(r => r.status === 'FAILED').length,
+        running: items.filter(r => r.status === 'RUNNING').length,
+      });
+    } catch (error: unknown) {
+      message.error((error as Error).message || '加载失败');
     } finally {
       setLoading(false);
     }
-  };
-
-  useEffect(() => {
-    loadRecords();
   }, [params]);
 
-  // 查看详情
-  const handleViewDetail = (record: TimerRecord) => {
-    setSelectedRecord(record);
-    setDetailVisible(true);
-  };
+  useEffect(() => {
+    const run = async () => { await loadRecords(); };
+    run();
+  }, [loadRecords]);
 
-  // 表格列定义
   const columns: ColumnsType<TimerRecord> = [
+    { title: 'ID', dataIndex: 'id', width: 60 },
     {
-      title: 'ID',
-      dataIndex: 'id',
-      width: 60,
-    },
-    {
-      title: '定时器ID',
+      title: '定时器',
       dataIndex: 'timer_id',
       width: 80,
+      render: (id: number) => `#${id}`,
     },
     {
       title: '触发时间',
       dataIndex: 'trigger_time',
-      width: 180,
-      render: (time: string) => new Date(time).toLocaleString('zh-CN'),
+      width: 160,
+      render: (t: string) => new Date(t).toLocaleString('zh-CN'),
     },
     {
       title: '状态',
       dataIndex: 'status',
-      width: 100,
+      width: 80,
       render: (status: RecordStatus) => {
         const config = RECORD_STATUS_CONFIG[status];
-        return <Tag color={config?.color}>{config?.label || status}</Tag>;
+        return (
+          <Space size={4}>
+            {statusIcon[status]}
+            <Tag color={config?.color}>{config?.label || status}</Tag>
+          </Space>
+        );
       },
     },
     {
-      title: '重试次数',
+      title: '重试',
       dataIndex: 'retry_count',
-      width: 80,
+      width: 60,
+      render: (n: number) => n || '-',
     },
     {
-      title: '请求方法',
-      dataIndex: 'request_method',
-      width: 80,
-    },
-    {
-      title: '请求地址',
-      dataIndex: 'request_url',
+      title: '请求',
       width: 200,
       ellipsis: true,
+      render: (_, r) => (
+        <Tooltip title={`${r.request_method} ${r.request_url}`}>
+          <span>{r.request_method} {r.request_url}</span>
+        </Tooltip>
+      ),
     },
     {
       title: '响应码',
       dataIndex: 'response_code',
-      width: 80,
+      width: 70,
       render: (code: number) => code || '-',
     },
     {
-      title: '耗时(ms)',
+      title: '耗时',
       dataIndex: 'duration',
-      width: 100,
-      render: (duration: number) => duration ? `${duration}ms` : '-',
-    },
-    {
-      title: '开始时间',
-      dataIndex: 'started_at',
-      width: 180,
-      render: (time: string | null) => time ? new Date(time).toLocaleString('zh-CN') : '-',
-    },
-    {
-      title: '完成时间',
-      dataIndex: 'finished_at',
-      width: 180,
-      render: (time: string | null) => time ? new Date(time).toLocaleString('zh-CN') : '-',
+      width: 80,
+      render: (ms: number) => ms ? `${ms}ms` : '-',
     },
     {
       title: '操作',
       key: 'action',
-      width: 60,
+      width: 50,
       render: (_, record) => (
-        <Tooltip title="查看详情">
-          <Button
-            type="link"
-            size="small"
-            icon={<EyeOutlined />}
-            onClick={() => handleViewDetail(record)}
-          />
+        <Tooltip title="详情">
+          <Button type="text" size="small" icon={<EyeOutlined />}
+            onClick={() => { setSelected(record); setDetailVisible(true); }} />
         </Tooltip>
       ),
     },
@@ -137,106 +141,103 @@ const ExecutionList: React.FC = () => {
 
   return (
     <div>
-      {/* 筛选栏 */}
+      <Row gutter={16} style={{ marginBottom: 20 }}>
+        <Col span={6}>
+          <Card size="small"><Statistic title="总计" value={stats.total} /></Card>
+        </Col>
+        <Col span={6}>
+          <Card size="small"><Statistic title="成功" value={stats.success} valueStyle={{ color: '#3f8600' }} /></Card>
+        </Col>
+        <Col span={6}>
+          <Card size="small"><Statistic title="失败" value={stats.failed} valueStyle={{ color: '#cf1322' }} /></Card>
+        </Col>
+        <Col span={6}>
+          <Card size="small"><Statistic title="运行中" value={stats.running} /></Card>
+        </Col>
+      </Row>
+
       <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
         <Space>
           <Select
-            placeholder="定时器ID筛选"
+            placeholder="定时器ID"
             style={{ width: 120 }}
             allowClear
-            onChange={(value) => setParams({ ...params, timer_id: value, page: 1 })}
             showSearch
+            onChange={(v) => setParams({ ...params, timer_id: v, page: 1 })}
           />
           <Select
-            placeholder="状态筛选"
-            style={{ width: 120 }}
+            placeholder="状态"
+            style={{ width: 100 }}
             allowClear
-            onChange={(value) => setParams({ ...params, status: value, page: 1 })}
-            options={Object.entries(RECORD_STATUS_CONFIG).map(([key, config]) => ({
-              label: config.label,
-              value: key,
-            }))}
+            onChange={(v) => setParams({ ...params, status: v, page: 1 })}
+            options={Object.entries(RECORD_STATUS_CONFIG).map(([k, v]) => ({ label: v.label, value: k }))}
           />
         </Space>
-        <Button
-          icon={<ReloadOutlined />}
-          onClick={loadRecords}
-        >
-          刷新
-        </Button>
+        <Button icon={<ReloadOutlined />} onClick={loadRecords}>刷新</Button>
       </div>
 
-      {/* 执行记录表格 */}
       <Table
         columns={columns}
         dataSource={records}
         rowKey="id"
         loading={loading}
-        scroll={{ x: 1500 }}
+        size="middle"
+        scroll={{ x: 1000 }}
         pagination={{
           current: params.page,
           pageSize: params.page_size,
           total,
           showSizeChanger: true,
-          showQuickJumper: true,
-          showTotal: (total) => `共 ${total} 条`,
-          onChange: (page, pageSize) => setParams({ ...params, page, page_size: pageSize }),
+          showTotal: (t) => `共 ${t} 条`,
+          onChange: (p, ps) => setParams({ ...params, page: p, page_size: ps }),
         }}
+        locale={{ emptyText: <Empty description="暂无数据" /> }}
       />
 
-      {/* 详情弹窗 */}
       <Modal
         title="执行详情"
         open={detailVisible}
         onCancel={() => setDetailVisible(false)}
         footer={null}
-        width={800}
+        width={700}
       >
-        {selectedRecord && (
+        {selected && (
           <Descriptions bordered column={2} size="small">
-            <Descriptions.Item label="执行ID">{selectedRecord.id}</Descriptions.Item>
-            <Descriptions.Item label="定时器ID">{selectedRecord.timer_id}</Descriptions.Item>
+            <Descriptions.Item label="ID">{selected.id}</Descriptions.Item>
+            <Descriptions.Item label="定时器ID">{selected.timer_id}</Descriptions.Item>
             <Descriptions.Item label="触发时间">
-              {new Date(selectedRecord.trigger_time).toLocaleString('zh-CN')}
+              {new Date(selected.trigger_time).toLocaleString('zh-CN')}
             </Descriptions.Item>
             <Descriptions.Item label="状态">
-              <Tag color={RECORD_STATUS_CONFIG[selectedRecord.status]?.color}>
-                {RECORD_STATUS_CONFIG[selectedRecord.status]?.label}
+              <Tag color={RECORD_STATUS_CONFIG[selected.status]?.color}>
+                {RECORD_STATUS_CONFIG[selected.status]?.label}
               </Tag>
             </Descriptions.Item>
-            <Descriptions.Item label="重试次数">{selectedRecord.retry_count}</Descriptions.Item>
-            <Descriptions.Item label="响应码">{selectedRecord.response_code || '-'}</Descriptions.Item>
-            <Descriptions.Item label="耗时">
-              {selectedRecord.duration ? `${selectedRecord.duration}ms` : '-'}
-            </Descriptions.Item>
-            <Descriptions.Item label="请求方法">{selectedRecord.request_method}</Descriptions.Item>
-            <Descriptions.Item label="请求地址" span={2}>
-              {selectedRecord.request_url}
-            </Descriptions.Item>
+            <Descriptions.Item label="重试">{selected.retry_count}</Descriptions.Item>
+            <Descriptions.Item label="响应码">{selected.response_code || '-'}</Descriptions.Item>
+            <Descriptions.Item label="耗时">{selected.duration ? `${selected.duration}ms` : '-'}</Descriptions.Item>
+            <Descriptions.Item label="方法">{selected.request_method}</Descriptions.Item>
+            <Descriptions.Item label="URL" span={2}>{selected.request_url}</Descriptions.Item>
             <Descriptions.Item label="请求体" span={2}>
-              <pre style={{ maxHeight: 100, overflow: 'auto', margin: 0 }}>
-                {selectedRecord.request_body || '-'}
+              <pre style={{ margin: 0, maxHeight: 100, overflow: 'auto', fontSize: 12 }}>
+                {selected.request_body || '-'}
               </pre>
             </Descriptions.Item>
             <Descriptions.Item label="响应体" span={2}>
-              <pre style={{ maxHeight: 100, overflow: 'auto', margin: 0 }}>
-                {selectedRecord.response_body || '-'}
+              <pre style={{ margin: 0, maxHeight: 100, overflow: 'auto', fontSize: 12 }}>
+                {selected.response_body || '-'}
               </pre>
             </Descriptions.Item>
-            {selectedRecord.error_message && (
-              <Descriptions.Item label="错误信息" span={2}>
-                <span style={{ color: '#ff4d4f' }}>{selectedRecord.error_message}</span>
+            {selected.error_message && (
+              <Descriptions.Item label="错误" span={2}>
+                <span style={{ color: '#cf1322' }}>{selected.error_message}</span>
               </Descriptions.Item>
             )}
-            <Descriptions.Item label="开始时间">
-              {selectedRecord.started_at
-                ? new Date(selectedRecord.started_at).toLocaleString('zh-CN')
-                : '-'}
+            <Descriptions.Item label="开始">
+              {selected.started_at ? new Date(selected.started_at).toLocaleString('zh-CN') : '-'}
             </Descriptions.Item>
-            <Descriptions.Item label="完成时间">
-              {selectedRecord.finished_at
-                ? new Date(selectedRecord.finished_at).toLocaleString('zh-CN')
-                : '-'}
+            <Descriptions.Item label="完成">
+              {selected.finished_at ? new Date(selected.finished_at).toLocaleString('zh-CN') : '-'}
             </Descriptions.Item>
           </Descriptions>
         )}

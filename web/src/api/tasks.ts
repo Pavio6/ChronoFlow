@@ -10,7 +10,7 @@ import type {
 
 // 获取定时器列表
 export const getTimers = async (params?: TimerListParams): Promise<TimerListResponse> => {
-  const res = await apiClient.get<any>('/timers', { params });
+  const res = await apiClient.get<TimerListResponse>('/timers', { params });
   return res.data;
 };
 

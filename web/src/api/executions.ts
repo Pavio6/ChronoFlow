@@ -8,7 +8,7 @@ import type {
 
 // 获取执行记录列表
 export const getRecords = async (params?: RecordListParams): Promise<RecordListResponse> => {
-  const res = await apiClient.get<any>('/records', { params });
+  const res = await apiClient.get<RecordListResponse>('/records', { params });
   return res.data;
 };
 
