@@ -62,6 +62,27 @@ func (p *CronParser) NextNTriggerTimes(expr string, from time.Time, n int) ([]ti
 	return times, nil
 }
 
+// NextTriggerTimesBefore 计算 from 到 end 之间的所有触发时间
+func (p *CronParser) NextTriggerTimesBefore(expr string, from time.Time, end time.Time) ([]time.Time, error) {
+	schedule, err := p.Parse(expr)
+	if err != nil {
+		return nil, err
+	}
+
+	var times []time.Time
+	current := from
+	for {
+		next := schedule.Next(current)
+		if next.After(end) {
+			break
+		}
+		times = append(times, next)
+		current = next
+	}
+
+	return times, nil
+}
+
 // ValidateCronExpr 验证 Cron 表达式是否合法
 func (p *CronParser) ValidateCronExpr(expr string) error {
 	_, err := p.Parse(expr)

@@ -41,15 +41,15 @@ type RedisConfig struct {
 }
 
 // SchedulerConfig 调度器配置
-// step1_duration: 一级时间步（秒），Migrator 批量预创建的时间范围
+// migrate_step_minutes: Migrator 执行间隔（分钟）
 // step2_duration: 二级时间步（秒），内存缓存刷新间隔
 // bucket_num: 分桶数量
 // scan_interval: Scheduler 轮询间隔（秒）
 type SchedulerConfig struct {
-	Step1Duration int `mapstructure:"step1_duration"`
-	Step2Duration int `mapstructure:"step2_duration"`
-	BucketNum     int `mapstructure:"bucket_num"`
-	ScanInterval  int `mapstructure:"scan_interval"`
+	MigrateStepMinutes int `mapstructure:"migrate_step_minutes"`
+	Step2Duration      int `mapstructure:"step2_duration"`
+	BucketNum          int `mapstructure:"bucket_num"`
+	ScanInterval       int `mapstructure:"scan_interval"`
 }
 
 // ExecutorConfig 执行器配置
@@ -124,8 +124,8 @@ func setDefaults() {
 	viper.SetDefault("redis.pool_size", 100)
 
 	// 调度器默认配置
-	viper.SetDefault("scheduler.step1_duration", 3600) // 60 分钟
-	viper.SetDefault("scheduler.step2_duration", 300)  // 5 分钟
+	viper.SetDefault("scheduler.migrate_step_minutes", 60) // 60 分钟
+	viper.SetDefault("scheduler.step2_duration", 300)       // 5 分钟
 	viper.SetDefault("scheduler.bucket_num", 3)
 	viper.SetDefault("scheduler.scan_interval", 1) // 1 秒
 

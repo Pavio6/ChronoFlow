@@ -14,28 +14,13 @@ const (
 	TaskQueuePrefix = "chronoflow:timer:"
 	// SchedulerLockPrefix 调度器分布式锁前缀
 	SchedulerLockPrefix = "chronoflow:scheduler_lock:"
-	// IdempotentPrefix 幂等性 key 前缀
-	IdempotentPrefix = "chronoflow:idempotent:"
 	// BloomPrefix 布隆过滤器 key 前缀
 	BloomPrefix = "chronoflow:bloom:"
+	// BucketMapPrefix 分桶映射 key 前缀，完整 key: {prefix}{time_range}
+	BucketMapPrefix = "chronoflow:bucket:"
 )
 
-// popDueTasksLua 原子弹出到期任务的 Lua 脚本
-// 1. ZRANGEBYSCORE 获取 score <= now 的成员
-// 2. 逐个 ZREM 删除
-// 3. 返回被弹出的成员列表
-var popDueTasksLua = redis.NewScript(`
-local key = KEYS[1]
-local now = tonumber(ARGV[1])
-local count = tonumber(ARGV[2])
-local members = redis.call('ZRANGEBYSCORE', key, '-inf', now, 'LIMIT', 0, count)
-if #members > 0 then
-    for i, member in ipairs(members) do
-        redis.call('ZREM', key, member)
-    end
-end
-return members
-`)
+
 
 // TaskTrigger 任务触发信息
 type TaskTrigger struct {
@@ -124,34 +109,29 @@ func (q *RedisQueue) BatchPushTasks(ctx context.Context, timeRange string, bucke
 	return nil
 }
 
-// PopDueTasks 原子弹出指定时间片桶中的到期任务
-// 通过 Lua 脚本保证 ZRANGEBYSCORE + ZREM 的原子性
-func (q *RedisQueue) PopDueTasks(ctx context.Context, timeRange string, bucket int, count int64) ([]*TaskTrigger, error) {
+// GetDueTasks 获取指定时间片桶中的到期任务（只读不删）
+// 使用 ZRANGEBYSCORE 获取 score <= now 的成员，任务保留在 ZSet 中
+// 防重复依赖分布式锁（同一分片同一时刻只有一个节点处理）
+func (q *RedisQueue) GetDueTasks(ctx context.Context, timeRange string, bucket int, count int64) ([]*TaskTrigger, error) {
 	key := buildQueueKey(timeRange, bucket)
 	now := time.Now().Unix()
 
-	// 执行 Lua 脚本，原子获取并删除到期任务
-	result, err := popDueTasksLua.Run(ctx, q.client, []string{key}, now, count).Result()
+	// ZRANGEBYSCORE 获取到期任务，只读不删
+	members, err := q.client.ZRangeByScore(ctx, key, &redis.ZRangeBy{
+		Min:   "-inf",
+		Max:   fmt.Sprintf("%d", now),
+		Count: count,
+	}).Result()
 	if err != nil {
-		if err == redis.Nil {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("弹出到期任务失败: %w", err)
+		return nil, fmt.Errorf("获取到期任务失败: %w", err)
 	}
 
-	// 解析返回的成员列表
-	members, ok := result.([]interface{})
-	if !ok || len(members) == 0 {
+	if len(members) == 0 {
 		return nil, nil
 	}
 
 	triggers := make([]*TaskTrigger, 0, len(members))
-	for _, m := range members {
-		memberStr, ok := m.(string)
-		if !ok {
-			continue
-		}
-
+	for _, memberStr := range members {
 		// 解析 member 格式: {timerID}:{triggerTimeMs}
 		var timerID int64
 		var triggerTimeMs int64
@@ -196,28 +176,27 @@ func (q *RedisQueue) ExtendSchedulerLock(ctx context.Context, timeRange string, 
 	return nil
 }
 
-// buildIdempotentKey 构建幂等性检查的完整 key
-func buildIdempotentKey(timerID int64, triggerTime time.Time) string {
-	return fmt.Sprintf("%s%d:%d", IdempotentPrefix, timerID, triggerTime.UnixMilli())
+// buildBucketMapKey 构建分桶映射的完整 key
+func buildBucketMapKey(timeRange string) string {
+	return fmt.Sprintf("%s%s", BucketMapPrefix, timeRange)
 }
 
-// SetIdempotentKey 设置幂等性 key（SETNX）
-// 用于防止同一任务在同一触发时间被重复执行
-func (q *RedisQueue) SetIdempotentKey(ctx context.Context, timerID int64, triggerTime time.Time, expiration time.Duration) (bool, error) {
-	key := buildIdempotentKey(timerID, triggerTime)
-	ok, err := q.client.SetNX(ctx, key, "1", expiration).Result()
-	if err != nil {
-		return false, fmt.Errorf("设置幂等 key 失败: %w", err)
-	}
-	return ok, nil
+// SetBucketNum 设置指定时间范围的分桶数量
+func (q *RedisQueue) SetBucketNum(ctx context.Context, timeRange string, bucketNum int, expiration time.Duration) error {
+	key := buildBucketMapKey(timeRange)
+	return q.client.Set(ctx, key, bucketNum, expiration).Err()
 }
 
-// IsIdempotent 检查幂等性 key 是否已存在
-func (q *RedisQueue) IsIdempotent(ctx context.Context, timerID int64, triggerTime time.Time) (bool, error) {
-	key := buildIdempotentKey(timerID, triggerTime)
-	exists, err := q.client.Exists(ctx, key).Result()
-	if err != nil {
-		return false, fmt.Errorf("检查幂等 key 失败: %w", err)
+// GetBucketNum 获取指定时间范围的分桶数量
+// 如果不存在，返回默认值 defaultBucketNum
+func (q *RedisQueue) GetBucketNum(ctx context.Context, timeRange string, defaultBucketNum int) (int, error) {
+	key := buildBucketMapKey(timeRange)
+	val, err := q.client.Get(ctx, key).Int()
+	if err == redis.Nil {
+		return defaultBucketNum, nil
 	}
-	return exists > 0, nil
+	if err != nil {
+		return defaultBucketNum, fmt.Errorf("获取分桶数量失败: %w", err)
+	}
+	return val, nil
 }

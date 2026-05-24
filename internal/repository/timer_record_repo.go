@@ -31,6 +31,8 @@ type TimerRecordRepository interface {
 	UpdateStatus(id int64, status model.RecordStatus) error
 	// ExistsByTimerIDAndTriggerTime 幂等性检查：判断指定定时器在指定触发时间是否已有非 PENDING 状态的记录
 	ExistsByTimerIDAndTriggerTime(timerID int64, triggerTime time.Time) (bool, error)
+	// GetPendingByTimeRange 获取指定时间范围内的 PENDING 记录（Trigger DB 回退用）
+	GetPendingByTimeRange(start, end time.Time) ([]*model.TimerRecord, error)
 }
 
 // timerRecordRepo 定时器执行记录仓库实现
@@ -192,4 +194,17 @@ func (r *timerRecordRepo) ExistsByTimerIDAndTriggerTime(timerID int64, triggerTi
 		return false, fmt.Errorf("幂等性检查查询失败: %w", err)
 	}
 	return count > 0, nil
+}
+
+// GetPendingByTimeRange 获取指定时间范围内的 PENDING 记录
+// 用于 Trigger 的 DB 回退机制：当 Redis 缓存 miss 时，从 MySQL 查询未执行的任务
+func (r *timerRecordRepo) GetPendingByTimeRange(start, end time.Time) ([]*model.TimerRecord, error) {
+	var items []*model.TimerRecord
+	err := r.db.Where("status = ? AND trigger_time >= ? AND trigger_time < ?", model.RecordStatusPending, start, end).
+		Order("trigger_time ASC").
+		Find(&items).Error
+	if err != nil {
+		return nil, fmt.Errorf("查询待执行记录失败: %w", err)
+	}
+	return items, nil
 }

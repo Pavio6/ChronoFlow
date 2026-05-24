@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Scheduler 调度器（对应 xTimer 的 Scheduler 模块）
+// Scheduler 调度器
 // 每隔 scan_interval（默认 1 秒）轮询一次，为每个二维分片抢分布式锁
 // 抢到锁后从协程池提交 Trigger 协程处理该分片
 // 核心流程：
@@ -75,52 +75,73 @@ func (s *Scheduler) Stop() {
 }
 
 // schedule 执行一轮调度
-// 计算当前时间范围，遍历每个桶，抢锁成功后提交 Trigger
+// 同时处理当前分钟和上一分钟，避免边界任务遗漏
 func (s *Scheduler) schedule(ctx context.Context) {
-	// 计算当前分钟级时间范围
 	now := time.Now()
-	timeRange := formatTimeRange(now)
+
+	// 计算当前分钟和上一分钟的时间范围
+	currentTimeRange := formatTimeRange(now)
+	prevTimeRange := formatTimeRange(now.Add(-time.Minute))
+
+	// 从 Redis 获取动态分桶数，如果不存在则使用配置中的默认值
+	bucketNum, err := s.queue.GetBucketNum(ctx, currentTimeRange, s.cfg.BucketNum)
+	if err != nil {
+		logger.Error("Scheduler 获取动态分桶数失败，使用默认值",
+			zap.String("time_range", currentTimeRange),
+			zap.Error(err),
+		)
+		bucketNum = s.cfg.BucketNum
+	}
 
 	// 锁的过期时间设为 scan_interval 的 2 倍，防止锁提前过期
 	lockExpiration := time.Duration(s.cfg.ScanInterval*2) * time.Second
 
-	// 遍历每个桶
-	for bucket := 0; bucket < s.cfg.BucketNum; bucket++ {
-		// 尝试获取分布式锁
-		acquired, err := s.queue.AcquireSchedulerLock(ctx, timeRange, bucket, lockExpiration)
-		if err != nil {
-			logger.Error("Scheduler 获取锁失败",
-				zap.String("time_range", timeRange),
-				zap.Int("bucket", bucket),
-				zap.Error(err),
-			)
-			continue
-		}
+	// 遍历每个桶，同时处理当前分钟和上一分钟
+	for bucket := 0; bucket < bucketNum; bucket++ {
+		// 处理当前分钟
+		s.handleSlice(ctx, currentTimeRange, bucket, bucketNum, lockExpiration)
+		// 处理上一分钟，避免边界任务遗漏
+		s.handleSlice(ctx, prevTimeRange, bucket, bucketNum, lockExpiration)
+	}
+}
 
-		// 未获取到锁，跳过此桶（其他实例正在处理）
-		if !acquired {
-			continue
-		}
+// handleSlice 处理单个时间片的单个桶：抢锁 → 提交 Trigger
+func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket int, bucketNum int, lockExpiration time.Duration) {
+	// 尝试获取分布式锁
+	acquired, err := s.queue.AcquireSchedulerLock(ctx, timeRange, bucket, lockExpiration)
+	if err != nil {
+		logger.Error("Scheduler 获取锁失败",
+			zap.String("time_range", timeRange),
+			zap.Int("bucket", bucket),
+			zap.Error(err),
+		)
+		return
+	}
 
-		// 获取到锁，从协程池提交 Trigger 协程
-		bucketCopy := bucket // 捕获循环变量
-		err = s.pool.Submit(func() {
-			s.trigger.Run(ctx, timeRange, bucketCopy)
-		})
-		if err != nil {
-			logger.Error("Scheduler 提交 Trigger 到协程池失败",
-				zap.String("time_range", timeRange),
+	// 未获取到锁，跳过（其他实例正在处理）
+	if !acquired {
+		return
+	}
+
+	// 获取到锁，从协程池提交 Trigger 协程
+	bucketCopy := bucket
+	timeRangeCopy := timeRange
+	err = s.pool.Submit(func() {
+		s.trigger.Run(ctx, timeRangeCopy, bucketCopy, bucketNum)
+	})
+	if err != nil {
+		logger.Error("Scheduler 提交 Trigger 到协程池失败",
+			zap.String("time_range", timeRangeCopy),
+			zap.Int("bucket", bucketCopy),
+			zap.Error(err),
+		)
+		// 提交失败时释放锁
+		if releaseErr := s.queue.ReleaseSchedulerLock(ctx, timeRangeCopy, bucketCopy); releaseErr != nil {
+			logger.Error("Scheduler 释放锁失败",
+				zap.String("time_range", timeRangeCopy),
 				zap.Int("bucket", bucketCopy),
-				zap.Error(err),
+				zap.Error(releaseErr),
 			)
-			// 提交失败时释放锁
-			if releaseErr := s.queue.ReleaseSchedulerLock(ctx, timeRange, bucketCopy); releaseErr != nil {
-				logger.Error("Scheduler 释放锁失败",
-					zap.String("time_range", timeRange),
-					zap.Int("bucket", bucketCopy),
-					zap.Error(releaseErr),
-				)
-			}
 		}
 	}
 }

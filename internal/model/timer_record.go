@@ -20,7 +20,7 @@ const (
 	RecordStatusTimeout RecordStatus = "TIMEOUT"
 )
 
-// TimerRecord 定时器执行记录（对应 xtimer 的 timer_task）
+// TimerRecord 定时器执行记录
 type TimerRecord struct {
 	ID            int64        `gorm:"primaryKey;autoIncrement" json:"id"`
 	TimerID       int64        `gorm:"index;not null;comment:定时器ID" json:"timer_id"`

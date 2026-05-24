@@ -14,7 +14,7 @@ const (
 	TimerStatusDeleted TimerStatus = "DELETED"
 )
 
-// TimerDefinition 定时器定义（对应 xtimer 的 timer）
+// TimerDefinition 定时器定义
 type TimerDefinition struct {
 	ID              int64       `gorm:"primaryKey;autoIncrement" json:"id"`
 	App             string      `gorm:"size:128;not null;comment:应用名" json:"app"`

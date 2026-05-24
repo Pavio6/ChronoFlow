@@ -2,27 +2,33 @@ package service
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/pkg/pool"
 	"github.com/chronoflow/internal/pkg/redis"
+	"github.com/chronoflow/internal/repository"
 	"github.com/chronoflow/pkg/logger"
 	"go.uber.org/zap"
 )
 
-// Trigger 触发器（对应 xTimer 的 Trigger 模块）
+// Trigger 触发器
 // 被 Scheduler 启动后，在时间片内持续轮询 Redis ZSet
-// 取出到期任务后从协程池提交 Executor 协程执行
+// 读取到期任务后从协程池提交 Executor 协程执行
 // 核心流程：
 //  1. 在时间片内持续轮询 Redis ZSet {time_range}:{bucket}
-//  2. ZRANGEBYSCORE 取 score <= now 的到期任务
-//  3. 从协程池提交 Executor 协程执行每个任务
-//  4. 完成后更新锁 TTL（延长过期时间，标记分片已处理）
+//  2. ZRANGEBYSCORE 获取 score <= now 的到期任务（只读不删）
+//  3. 若 Redis 无结果，回退查询 MySQL（冷启动兜底）
+//  4. 从协程池提交 Executor 协程执行每个任务
+//  5. 完成后更新锁 TTL（延长过期时间，标记分片已处理）
+// 防重复机制：任务保留在 ZSet 中，依赖分布式锁保证同一分片同一时刻只有一个节点处理
+// DB 回退：冷启动时 Migrator 尚未预创建 Redis 数据，Trigger 从 MySQL 读取 PENDING 记录兜底
 type Trigger struct {
 	queue    *redis.RedisQueue
 	pool     *pool.GoWorkerPool
 	executor *Executor
+	recRepo  repository.TimerRecordRepository
 	cfg      *config.SchedulerConfig
 }
 
@@ -31,12 +37,14 @@ func NewTrigger(
 	queue *redis.RedisQueue,
 	pool *pool.GoWorkerPool,
 	executor *Executor,
+	recRepo repository.TimerRecordRepository,
 	cfg *config.SchedulerConfig,
 ) *Trigger {
 	return &Trigger{
 		queue:    queue,
 		pool:     pool,
 		executor: executor,
+		recRepo:  recRepo,
 		cfg:      cfg,
 	}
 }
@@ -44,8 +52,9 @@ func NewTrigger(
 // Run 在指定时间片内轮询指定桶的 Redis ZSet，取出到期任务并提交 Executor 执行
 // timeRange: 时间范围标识（YYYY-MM-DD-HH:mm）
 // bucket: 桶号
+// bucketNum: 总桶数（用于 DB 回退时按 timer_id % bucketNum 过滤）
 // 此方法由 Scheduler 通过协程池调用
-func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int) {
+func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketNum int) {
 	start := time.Now()
 	logger.Debug("Trigger 开始处理",
 		zap.String("time_range", timeRange),
@@ -78,10 +87,10 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int) {
 		default:
 		}
 
-		// 从 Redis ZSet 原子弹出到期任务
-		triggers, err := t.queue.PopDueTasks(ctx, timeRange, bucket, batchSize)
+		// 从 Redis ZSet 获取到期任务（只读不删，依赖分布式锁防重）
+		triggers, err := t.queue.GetDueTasks(ctx, timeRange, bucket, batchSize)
 		if err != nil {
-			logger.Error("Trigger 弹出到期任务失败",
+			logger.Error("Trigger 获取到期任务失败",
 				zap.String("time_range", timeRange),
 				zap.Int("bucket", bucket),
 				zap.Error(err),
@@ -89,6 +98,18 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int) {
 			// 短暂等待后重试
 			time.Sleep(100 * time.Millisecond)
 			continue
+		}
+
+		// Redis 无结果时，回退查询 MySQL（冷启动兜底）
+		if len(triggers) == 0 {
+			triggers, err = t.getDueTasksFromDB(ctx, timeRange, bucket, bucketNum)
+			if err != nil {
+				logger.Error("Trigger DB 回退查询失败",
+					zap.String("time_range", timeRange),
+					zap.Int("bucket", bucket),
+					zap.Error(err),
+				)
+			}
 		}
 
 		// 无到期任务，短暂等待后继续轮询
@@ -139,4 +160,43 @@ func calculateTimeSliceEnd(timeRange string) (t time.Time) {
 	}
 	// 时间片结束 = 当前分钟的 59 秒
 	return parsed.Add(time.Minute).Add(-time.Second)
+}
+
+// getDueTasksFromDB DB 回退：当 Redis 缓存 miss 时，从 MySQL 查询 PENDING 记录
+// 过滤条件：status = PENDING, trigger_time 在当前分钟范围内, timer_id % bucketNum == bucket
+func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucket int, bucketNum int) ([]*redis.TaskTrigger, error) {
+	// 解析时间范围
+	start, err := time.Parse("2006-01-02-15:04", timeRange)
+	if err != nil {
+		return nil, fmt.Errorf("解析时间范围失败: %w", err)
+	}
+	end := start.Add(time.Minute)
+
+	// 查询 PENDING 记录
+	records, err := t.recRepo.GetPendingByTimeRange(start, end)
+	if err != nil {
+		return nil, err
+	}
+
+	// 按 bucket 过滤并转换为 TaskTrigger
+	var triggers []*redis.TaskTrigger
+	for _, record := range records {
+		if int(record.TimerID)%bucketNum != bucket {
+			continue
+		}
+		triggers = append(triggers, &redis.TaskTrigger{
+			TimerID:     record.TimerID,
+			TriggerTime: record.TriggerTime,
+		})
+	}
+
+	if len(triggers) > 0 {
+		logger.Debug("Trigger DB 回退命中",
+			zap.String("time_range", timeRange),
+			zap.Int("bucket", bucket),
+			zap.Int("count", len(triggers)),
+		)
+	}
+
+	return triggers, nil
 }

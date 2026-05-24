@@ -20,20 +20,18 @@ import (
 	"go.uber.org/zap"
 )
 
-// Executor 执行器（对应 xTimer 的 Executor 模块）
+// Executor 执行器
 // 被 Trigger 启动后，执行单个定时任务
-// 核心流程（三层幂等去重）：
+// 核心流程（两层幂等去重）：
 //  1. Bloom Filter 快速查重
-//  2. 若命中，检查 Redis 幂等键（SETNX）
-//  3. 若 Redis 也命中，查 MySQL 确认
-//  4. 查询定时器定义（先内存缓存，miss 再 MySQL）
-//  5. 执行 HTTP 回调
-//  6. Bloom Filter 打点 + Redis 幂等键设置
-//  7. 更新 MySQL 执行记录状态
+//  2. 若命中，查 MySQL 记录状态确认
+//  3. 查询定时器定义（先内存缓存，miss 再 MySQL）
+//  4. 执行 HTTP 回调
+//  5. 执行成功 → Bloom Filter 打点（仅成功时写入，失败任务可重试）
+//  6. 更新 MySQL 执行记录状态
 type Executor struct {
 	defRepo    repository.TimerDefinitionRepository
 	recRepo    repository.TimerRecordRepository
-	queue      *redis.RedisQueue
 	bloom      *bloom.Filter
 	cache      *memory.TimerCache
 	retryCalc  *retry.Calculator
@@ -46,7 +44,6 @@ type Executor struct {
 func NewExecutor(
 	defRepo repository.TimerDefinitionRepository,
 	recRepo repository.TimerRecordRepository,
-	queue *redis.RedisQueue,
 	bloom *bloom.Filter,
 	cache *memory.TimerCache,
 	retryCalc *retry.Calculator,
@@ -61,7 +58,6 @@ func NewExecutor(
 	return &Executor{
 		defRepo:    defRepo,
 		recRepo:    recRepo,
-		queue:      queue,
 		bloom:      bloom,
 		cache:      cache,
 		retryCalc:  retryCalc,
@@ -97,32 +93,21 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 	}
 
 	if mightExist {
-		// 第二层：Redis 幂等键检查
-		isIdempotent, err := e.queue.IsIdempotent(ctx, timerID, triggerTime)
+		// 第二层：MySQL 查重确认
+		exists, err := e.recRepo.ExistsByTimerIDAndTriggerTime(timerID, triggerTime)
 		if err != nil {
-			logger.Error("Executor Redis 幂等检查失败",
+			logger.Error("Executor MySQL 幂等检查失败",
 				zap.Int64("timer_id", timerID),
 				zap.Error(err),
 			)
 		}
 
-		if isIdempotent {
-			// 第三层：MySQL 查重确认
-			exists, err := e.recRepo.ExistsByTimerIDAndTriggerTime(timerID, triggerTime)
-			if err != nil {
-				logger.Error("Executor MySQL 幂等检查失败",
-					zap.Int64("timer_id", timerID),
-					zap.Error(err),
-				)
-			}
-
-			if exists {
-				logger.Debug("Executor 任务已执行，跳过",
-					zap.Int64("timer_id", timerID),
-					zap.Time("trigger_time", triggerTime),
-				)
-				return
-			}
+		if exists {
+			logger.Debug("Executor 任务已执行，跳过",
+				zap.Int64("timer_id", timerID),
+				zap.Time("trigger_time", triggerTime),
+			)
+			return
 		}
 	}
 
@@ -211,6 +196,14 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 		record.ResponseCode = responseCode
 		record.ResponseBody = responseBody
 
+		// Bloom Filter 打点（仅成功时写入，避免失败任务被标记为已执行导致无法重试）
+		if err := e.bloom.Set(ctx, bloomKey, bloomVal, 86400); err != nil {
+			logger.Error("Executor Bloom Filter 设置失败",
+				zap.Int64("timer_id", timerID),
+				zap.Error(err),
+			)
+		}
+
 		// 上报成功指标
 		e.reporter.ReportExecSuccess(timerID, def.App)
 
@@ -225,22 +218,6 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 	if err := e.recRepo.Update(record); err != nil {
 		logger.Error("Executor 更新执行记录失败",
 			zap.Int64("record_id", record.ID),
-			zap.Error(err),
-		)
-	}
-
-	// Bloom Filter 打点
-	if err := e.bloom.Set(ctx, bloomKey, bloomVal, 86400); err != nil {
-		logger.Error("Executor Bloom Filter 设置失败",
-			zap.Int64("timer_id", timerID),
-			zap.Error(err),
-		)
-	}
-
-	// Redis 幂等键设置
-	if _, err := e.queue.SetIdempotentKey(ctx, timerID, triggerTime, 24*time.Hour); err != nil {
-		logger.Error("Executor Redis 幂等键设置失败",
-			zap.Int64("timer_id", timerID),
 			zap.Error(err),
 		)
 	}

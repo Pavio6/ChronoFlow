@@ -98,14 +98,14 @@ func main() {
 	logger.Info("协程池创建成功", zap.Int("size", cfg.Executor.WorkerPoolSize))
 
 	// ========== 8. 初始化服务层 ==========
-	// 执行器（被 Trigger 调用）
+	// 执行器（被 Trigger 调用，两层幂等：Bloom Filter + MySQL）
 	executor := service.NewExecutor(
-		defRepo, recRepo, queue, bloomFilter, timerCache,
+		defRepo, recRepo, bloomFilter, timerCache,
 		retryCalculator, reporter, &cfg.Executor,
 	)
 
-	// 触发器（被 Scheduler 调用）
-	trigger := service.NewTrigger(queue, workerPool, executor, &cfg.Scheduler)
+	// 触发器（被 Scheduler 调用，DB 回退需要 recRepo）
+	trigger := service.NewTrigger(queue, workerPool, executor, recRepo, &cfg.Scheduler)
 
 	// 调度器
 	scheduler := service.NewScheduler(queue, workerPool, trigger, &cfg.Scheduler)
@@ -114,7 +114,7 @@ func main() {
 	migrator := service.NewMigrator(defRepo, recRepo, queue, cronParser, &cfg.Scheduler)
 
 	// 定时器 CRUD 服务
-	timerService := service.NewTimerService(defRepo, recRepo, cronParser)
+	timerService := service.NewTimerService(defRepo, recRepo, cronParser, queue, &cfg.Scheduler)
 
 	// ========== 9. 启动后台服务 ==========
 	ctx, cancel := context.WithCancel(context.Background())
@@ -127,7 +127,7 @@ func main() {
 	go scheduler.Start(ctx)
 
 	logger.Info("后台服务已启动",
-		zap.Int("step1_duration", cfg.Scheduler.Step1Duration),
+		zap.Int("migrate_step_minutes", cfg.Scheduler.MigrateStepMinutes),
 		zap.Int("step2_duration", cfg.Scheduler.Step2Duration),
 		zap.Int("bucket_num", cfg.Scheduler.BucketNum),
 	)
