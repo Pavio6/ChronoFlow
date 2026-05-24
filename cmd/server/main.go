@@ -134,6 +134,8 @@ func main() {
 	// 注册 API 路由
 	timerHandler := handler.NewTimerHandler(timerService)
 	timerHandler.RegisterRoutes(r)
+	monitoringHandler := handler.NewMonitoringHandler(defRepo, recRepo, queue, reporter)
+	monitoringHandler.RegisterRoutes(r)
 
 	// Prometheus 指标端点
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))

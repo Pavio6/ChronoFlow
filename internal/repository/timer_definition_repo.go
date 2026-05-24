@@ -24,6 +24,8 @@ type TimerDefinitionRepository interface {
 	GetActiveDefinitions() ([]*model.TimerDefinition, error)
 	// UpdateStatus 更新定时器定义状态
 	UpdateStatus(id int64, status model.TimerStatus) error
+	// CountByStatus 按定时器状态统计数量
+	CountByStatus() (map[model.TimerStatus]int64, error)
 }
 
 // timerDefinitionRepo 定时器定义仓库实现
@@ -146,4 +148,26 @@ func (r *timerDefinitionRepo) UpdateStatus(id int64, status model.TimerStatus) e
 		return fmt.Errorf("定时器定义不存在，id=%d", id)
 	}
 	return nil
+}
+
+// CountByStatus 按定时器状态统计数量
+func (r *timerDefinitionRepo) CountByStatus() (map[model.TimerStatus]int64, error) {
+	type row struct {
+		Status model.TimerStatus
+		Count  int64
+	}
+
+	var rows []row
+	if err := r.db.Model(&model.TimerDefinition{}).
+		Select("status, count(*) as count").
+		Group("status").
+		Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("统计定时器状态失败: %w", err)
+	}
+
+	result := make(map[model.TimerStatus]int64, len(rows))
+	for _, item := range rows {
+		result[item.Status] = item.Count
+	}
+	return result, nil
 }

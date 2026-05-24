@@ -109,3 +109,36 @@ export interface RecordListParams {
   timer_id?: number;
   status?: RecordStatus;
 }
+
+export interface MonitoringSummary {
+  timers: {
+    total: number;
+    active: number;
+    inactive: number;
+    deleted: number;
+  };
+  records: {
+    total: number;
+    pending: number;
+    running: number;
+    success: number;
+    failed: number;
+    timeout: number;
+  };
+  redis: {
+    queue_keys: number;
+    queue_items: number;
+    lock_keys: number;
+    bucket_keys: number;
+  };
+  runtime: {
+    exec_total: number;
+    exec_success: number;
+    exec_failed: number;
+    trigger_total: number;
+    avg_duration_ms: number;
+    success_rate: number;
+    last_collected_msg: string;
+  };
+  exporter: string;
+}

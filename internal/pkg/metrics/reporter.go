@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promauto"
@@ -49,7 +50,24 @@ type Reporter struct {
 	// triggerTotal 定时器触发总次数
 	triggerTotal *prometheus.CounterVec
 	// queueSize 定时器队列大小
-	queueSize prometheus.GaugeFunc
+	queueSize         prometheus.GaugeFunc
+	execTotalCount    atomic.Int64
+	execSuccessCount  atomic.Int64
+	execFailedCount   atomic.Int64
+	triggerTotalCount atomic.Int64
+	durationTotalMs   atomic.Int64
+	durationCount     atomic.Int64
+}
+
+// Snapshot 当前进程内的指标快照，供前端监控页使用
+type Snapshot struct {
+	ExecTotal        int64   `json:"exec_total"`
+	ExecSuccess      int64   `json:"exec_success"`
+	ExecFailed       int64   `json:"exec_failed"`
+	TriggerTotal     int64   `json:"trigger_total"`
+	AvgDurationMs    float64 `json:"avg_duration_ms"`
+	SuccessRate      float64 `json:"success_rate"`
+	LastCollectedMsg string  `json:"last_collected_msg"`
 }
 
 var (
@@ -108,6 +126,7 @@ func (r *Reporter) ReportExecRecord(timerID int64, app string) {
 		LabelTimerID: formatID(timerID),
 		LabelApp:     app,
 	}).Inc()
+	r.execTotalCount.Add(1)
 }
 
 // ReportExecDuration 上报定时器执行耗时
@@ -116,6 +135,8 @@ func (r *Reporter) ReportExecDuration(timerID int64, app string, durationMs floa
 		LabelTimerID: formatID(timerID),
 		LabelApp:     app,
 	}).Observe(durationMs)
+	r.durationTotalMs.Add(int64(durationMs))
+	r.durationCount.Add(1)
 }
 
 // ReportExecSuccess 上报定时器执行成功
@@ -124,6 +145,7 @@ func (r *Reporter) ReportExecSuccess(timerID int64, app string) {
 		LabelTimerID: formatID(timerID),
 		LabelApp:     app,
 	}).Inc()
+	r.execSuccessCount.Add(1)
 }
 
 // ReportExecFailed 上报定时器执行失败
@@ -133,6 +155,7 @@ func (r *Reporter) ReportExecFailed(timerID int64, app, status string) {
 		LabelApp:     app,
 		LabelStatus:  status,
 	}).Inc()
+	r.execFailedCount.Add(1)
 }
 
 // ReportTrigger 上报定时器触发
@@ -140,6 +163,34 @@ func (r *Reporter) ReportTrigger(app string) {
 	r.triggerTotal.With(prometheus.Labels{
 		LabelApp: app,
 	}).Inc()
+	r.triggerTotalCount.Add(1)
+}
+
+// Snapshot 返回当前进程内的聚合指标
+func (r *Reporter) Snapshot() Snapshot {
+	execTotal := r.execTotalCount.Load()
+	durationCount := r.durationCount.Load()
+	success := r.execSuccessCount.Load()
+
+	var avgDuration float64
+	if durationCount > 0 {
+		avgDuration = float64(r.durationTotalMs.Load()) / float64(durationCount)
+	}
+
+	var successRate float64
+	if execTotal > 0 {
+		successRate = float64(success) / float64(execTotal)
+	}
+
+	return Snapshot{
+		ExecTotal:        execTotal,
+		ExecSuccess:      success,
+		ExecFailed:       r.execFailedCount.Load(),
+		TriggerTotal:     r.triggerTotalCount.Load(),
+		AvgDurationMs:    avgDuration,
+		SuccessRate:      successRate,
+		LastCollectedMsg: "process-local",
+	}
 }
 
 // GetHandler 返回 Prometheus HTTP 指标暴露 handler

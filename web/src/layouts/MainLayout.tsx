@@ -5,6 +5,7 @@ import {
   HistoryOutlined,
   ClockCircleOutlined,
   PlusOutlined,
+  DashboardOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 
@@ -13,13 +14,16 @@ const { Header, Sider, Content } = Layout;
 const menuItems = [
   { key: '/tasks', icon: <ScheduleOutlined />, label: '任务管理' },
   { key: '/executions', icon: <HistoryOutlined />, label: '执行记录' },
+  { key: '/monitoring', icon: <DashboardOutlined />, label: '监控面板' },
 ];
 
 const MainLayout: React.FC = () => {
   const navigate = useNavigate();
   const location = useLocation();
 
-  const pageMeta = location.pathname.startsWith('/executions')
+  const pageMeta = location.pathname.startsWith('/monitoring')
+    ? { title: '监控面板', desc: '观察执行质量、队列状态和运行时指标' }
+    : location.pathname.startsWith('/executions')
     ? { title: '执行记录', desc: '查看回调状态、耗时和失败原因' }
     : location.pathname.includes('/create')
       ? { title: '创建任务', desc: '配置 Cron、回调和执行超时' }
@@ -39,7 +43,13 @@ const MainLayout: React.FC = () => {
         </div>
         <Menu
           mode="inline"
-          selectedKeys={[location.pathname.startsWith('/executions') ? '/executions' : '/tasks']}
+          selectedKeys={[
+            location.pathname.startsWith('/monitoring')
+              ? '/monitoring'
+              : location.pathname.startsWith('/executions')
+                ? '/executions'
+                : '/tasks',
+          ]}
           items={menuItems}
           onClick={({ key }) => navigate(key)}
           className="side-menu"

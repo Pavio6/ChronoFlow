@@ -77,7 +77,7 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 	)
 
 	// 第一层：Bloom Filter 快速查重
-	bloomKey := fmt.Sprintf("chronoflow:bloom:%s", time.Now().Format("2006-01-02"))
+	bloomKey := fmt.Sprintf("%s%s", redis.BloomPrefix, time.Now().Format("2006-01-02"))
 	bloomVal := fmt.Sprintf("%d:%d", timerID, triggerTime.UnixMilli())
 	mightExist, err := e.bloom.Exist(ctx, bloomKey, bloomVal)
 	if err != nil {
@@ -124,6 +124,7 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 		)
 		return
 	}
+	e.reporter.ReportTrigger(def.App)
 
 	// 查找对应的执行记录
 	record, err := e.findOrCreateRecord(ctx, timerID, triggerTime, def)

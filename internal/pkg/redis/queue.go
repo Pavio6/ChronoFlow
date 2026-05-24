@@ -20,8 +20,6 @@ const (
 	BucketMapPrefix = "chronoflow:bucket:"
 )
 
-
-
 // TaskTrigger 任务触发信息
 type TaskTrigger struct {
 	// TimerID 定时器 ID
@@ -33,6 +31,14 @@ type TaskTrigger struct {
 // RedisQueue 基于 Redis ZSet 的时间片任务队列
 type RedisQueue struct {
 	client *redis.Client
+}
+
+// QueueStats Redis 队列与锁的聚合统计
+type QueueStats struct {
+	QueueKeys  int64 `json:"queue_keys"`
+	QueueItems int64 `json:"queue_items"`
+	LockKeys   int64 `json:"lock_keys"`
+	BucketKeys int64 `json:"bucket_keys"`
 }
 
 // InitRedis 初始化 Redis 客户端连接
@@ -209,4 +215,55 @@ func (q *RedisQueue) GetBucketNum(ctx context.Context, timeRange string, default
 		return defaultBucketNum, fmt.Errorf("获取分桶数量失败: %w", err)
 	}
 	return val, nil
+}
+
+// Stats 汇总 ChronoFlow 在 Redis 中的队列、锁和分桶 key 数量
+func (q *RedisQueue) Stats(ctx context.Context) (QueueStats, error) {
+	var stats QueueStats
+	if err := q.scanKeys(ctx, TaskQueuePrefix+"*", func(key string) error {
+		stats.QueueKeys++
+		count, err := q.client.ZCard(ctx, key).Result()
+		if err != nil {
+			return fmt.Errorf("统计队列长度失败: %w", err)
+		}
+		stats.QueueItems += count
+		return nil
+	}); err != nil {
+		return stats, err
+	}
+
+	if err := q.scanKeys(ctx, SchedulerLockPrefix+"*", func(key string) error {
+		stats.LockKeys++
+		return nil
+	}); err != nil {
+		return stats, err
+	}
+
+	if err := q.scanKeys(ctx, BucketMapPrefix+"*", func(key string) error {
+		stats.BucketKeys++
+		return nil
+	}); err != nil {
+		return stats, err
+	}
+
+	return stats, nil
+}
+
+func (q *RedisQueue) scanKeys(ctx context.Context, pattern string, visit func(key string) error) error {
+	var cursor uint64
+	for {
+		keys, nextCursor, err := q.client.Scan(ctx, cursor, pattern, 100).Result()
+		if err != nil {
+			return fmt.Errorf("扫描 Redis key 失败: %w", err)
+		}
+		for _, key := range keys {
+			if err := visit(key); err != nil {
+				return err
+			}
+		}
+		if nextCursor == 0 {
+			return nil
+		}
+		cursor = nextCursor
+	}
 }

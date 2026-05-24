@@ -33,6 +33,8 @@ type TimerRecordRepository interface {
 	GetPendingByTimeRange(start, end time.Time) ([]*model.TimerRecord, error)
 	// HasPendingByTimeRangeAndBucket 判断指定时间范围和桶内是否存在 PENDING 记录
 	HasPendingByTimeRangeAndBucket(start, end time.Time, bucket int, bucketNum int) (bool, error)
+	// CountByStatus 按执行状态统计记录数量
+	CountByStatus() (map[model.RecordStatus]int64, error)
 }
 
 // timerRecordRepo 定时器执行记录仓库实现
@@ -207,4 +209,26 @@ func (r *timerRecordRepo) HasPendingByTimeRangeAndBucket(start, end time.Time, b
 		return false, fmt.Errorf("查询待执行记录失败: %w", err)
 	}
 	return count > 0, nil
+}
+
+// CountByStatus 按执行状态统计记录数量
+func (r *timerRecordRepo) CountByStatus() (map[model.RecordStatus]int64, error) {
+	type row struct {
+		Status model.RecordStatus
+		Count  int64
+	}
+
+	var rows []row
+	if err := r.db.Model(&model.TimerRecord{}).
+		Select("status, count(*) as count").
+		Group("status").
+		Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("统计执行记录状态失败: %w", err)
+	}
+
+	result := make(map[model.RecordStatus]int64, len(rows))
+	for _, item := range rows {
+		result[item.Status] = item.Count
+	}
+	return result, nil
 }

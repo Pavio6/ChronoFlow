@@ -6,6 +6,7 @@ import MainLayout from './layouts/MainLayout';
 import TaskList from './pages/TaskList';
 import TaskForm from './pages/TaskForm';
 import ExecutionList from './pages/ExecutionList';
+import Monitoring from './pages/Monitoring';
 import './App.css';
 
 const App: React.FC = () => {
@@ -64,6 +65,7 @@ const App: React.FC = () => {
             <Route path="tasks/create" element={<TaskForm />} />
             <Route path="tasks/edit/:id" element={<TaskForm />} />
             <Route path="executions" element={<ExecutionList />} />
+            <Route path="monitoring" element={<Monitoring />} />
           </Route>
         </Routes>
       </BrowserRouter>
