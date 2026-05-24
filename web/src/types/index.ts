@@ -10,7 +10,6 @@ export type RecordStatus =
   | 'RUNNING'   // 执行中
   | 'SUCCESS'   // 执行成功
   | 'FAILED'    // 执行失败
-  | 'RETRYING'  // 重试中
   | 'TIMEOUT';  // 执行超时
 
 // 定时器定义接口
@@ -25,7 +24,6 @@ export interface TimerDefinition {
   callback_headers: string;
   status: TimerStatus;
   timeout: number;
-  max_retries: number;
   created_at: string;
   updated_at: string;
 }
@@ -40,7 +38,6 @@ export interface CreateTimerRequest {
   callback_body?: string;
   callback_headers?: Record<string, string>;
   timeout?: number;
-  max_retries?: number;
 }
 
 // 更新定时器请求
@@ -52,7 +49,6 @@ export interface UpdateTimerRequest {
   callback_body?: string;
   callback_headers?: Record<string, string>;
   timeout?: number;
-  max_retries?: number;
 }
 
 // 定时器列表响应
@@ -69,7 +65,6 @@ export interface TimerRecord {
   timer_id: number;
   trigger_time: string;
   status: RecordStatus;
-  retry_count: number;
   request_url: string;
   request_method: string;
   request_body: string;
@@ -79,7 +74,6 @@ export interface TimerRecord {
   started_at: string | null;
   finished_at: string | null;
   duration: number;
-  next_retry_time: string | null;
   created_at: string;
   updated_at: string;
 }

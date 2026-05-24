@@ -21,7 +21,6 @@ CREATE TABLE IF NOT EXISTS timer_definitions (
     callback_headers TEXT COMMENT '回调请求头（JSON格式）',
     status          VARCHAR(32) NOT NULL DEFAULT 'INACTIVE' COMMENT '状态：ACTIVE/INACTIVE/DELETED',
     timeout         INT DEFAULT 30 COMMENT 'HTTP回调超时时间（秒）',
-    max_retries     INT DEFAULT 3 COMMENT '最大重试次数',
     created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     INDEX idx_status(status),
@@ -29,13 +28,12 @@ CREATE TABLE IF NOT EXISTS timer_definitions (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='定时器定义表';
 
 -- 定时器执行记录表
--- 存储每次定时任务的执行详情，包括请求/响应信息、重试状态等
+-- 存储每次定时任务的执行详情，包括请求/响应信息等
 CREATE TABLE IF NOT EXISTS timer_records (
     id              BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '记录ID',
     timer_id        BIGINT NOT NULL COMMENT '定时器ID',
     trigger_time    DATETIME NOT NULL COMMENT '计划触发时间',
-    status          VARCHAR(32) NOT NULL DEFAULT 'PENDING' COMMENT '执行状态：PENDING/RUNNING/SUCCESS/FAILED/RETRYING/TIMEOUT',
-    retry_count     INT DEFAULT 0 COMMENT '已重试次数',
+    status          VARCHAR(32) NOT NULL DEFAULT 'PENDING' COMMENT '执行状态：PENDING/RUNNING/SUCCESS/FAILED/TIMEOUT',
     request_url     VARCHAR(512) COMMENT '实际请求URL',
     request_method  VARCHAR(16) COMMENT '实际请求方法',
     request_body    TEXT COMMENT '实际请求体',
@@ -45,11 +43,9 @@ CREATE TABLE IF NOT EXISTS timer_records (
     started_at      DATETIME COMMENT '开始执行时间',
     finished_at     DATETIME COMMENT '执行完成时间',
     duration        BIGINT COMMENT '执行耗时（毫秒）',
-    next_retry_time DATETIME COMMENT '下次重试时间',
     created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
     INDEX idx_timer_id(timer_id),
     INDEX idx_trigger_time(trigger_time),
-    INDEX idx_status(status),
-    INDEX idx_next_retry_time(next_retry_time)
+    INDEX idx_status(status)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='定时器执行记录表';

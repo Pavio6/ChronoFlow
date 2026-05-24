@@ -35,20 +35,8 @@ scheduler:
 executor:
   # HTTP 回调超时（秒）
   timeout: 30
-  # 最大重试次数
-  max_retries: 3
   # 协程池大小
   worker_pool_size: 100
-
-retry:
-  # 重试策略: exponential（指数退避）, fixed（固定间隔）
-  strategy: exponential
-  # 初始重试间隔（秒）
-  initial_interval: 10
-  # 最大重试间隔（秒）
-  max_interval: 60
-  # 退避倍数
-  multiplier: 3.0
 
 log:
   level: info

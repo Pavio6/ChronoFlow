@@ -6,6 +6,7 @@ import MainLayout from './layouts/MainLayout';
 import TaskList from './pages/TaskList';
 import TaskForm from './pages/TaskForm';
 import ExecutionList from './pages/ExecutionList';
+import './App.css';
 
 const App: React.FC = () => {
   return (
@@ -13,7 +14,45 @@ const App: React.FC = () => {
       locale={zhCN}
       theme={{
         token: {
-          borderRadius: 4,
+          colorPrimary: '#18181b',
+          colorSuccess: '#16a34a',
+          colorWarning: '#d97706',
+          colorError: '#dc2626',
+          colorInfo: '#2563eb',
+          colorText: '#18181b',
+          colorTextSecondary: '#71717a',
+          colorBorder: '#e4e4e7',
+          colorBgLayout: '#fafafa',
+          colorBgContainer: '#ffffff',
+          borderRadius: 6,
+          fontFamily:
+            'ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
+          controlHeight: 36,
+        },
+        components: {
+          Button: {
+            borderRadius: 6,
+            defaultShadow: 'none',
+            primaryShadow: 'none',
+          },
+          Card: {
+            borderRadiusLG: 8,
+            boxShadowTertiary: 'none',
+          },
+          Table: {
+            borderColor: '#d4d4d8',
+            headerBg: '#fafafa',
+            headerColor: '#52525b',
+            rowHoverBg: '#fafafa',
+          },
+          Select: {
+            optionActiveBg: '#f4f4f5',
+            optionSelectedBg: '#f4f4f5',
+            optionSelectedColor: '#18181b',
+          },
+          Tag: {
+            borderRadiusSM: 999,
+          },
         },
       }}
     >

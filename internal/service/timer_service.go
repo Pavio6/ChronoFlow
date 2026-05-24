@@ -71,7 +71,6 @@ func (s *TimerService) Create(req *model.CreateTimerDefinitionRequest) (*model.T
 		CallbackHeaders: headersJSON,
 		Status:          model.TimerStatusInactive,
 		Timeout:         req.Timeout,
-		MaxRetries:      req.MaxRetries,
 	}
 
 	if err := s.defRepo.Create(def); err != nil {
@@ -134,9 +133,6 @@ func (s *TimerService) Update(id int64, req *model.UpdateTimerDefinitionRequest)
 	}
 	if req.Timeout != nil {
 		def.Timeout = *req.Timeout
-	}
-	if req.MaxRetries != nil {
-		def.MaxRetries = *req.MaxRetries
 	}
 
 	if err := s.defRepo.Update(def); err != nil {

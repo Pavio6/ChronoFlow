@@ -108,7 +108,7 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
 				zap.Int("bucket", bucket),
 				zap.Error(err),
 			)
-			// 短暂等待后重试
+			// 短暂等待后进入下一轮扫描
 			time.Sleep(100 * time.Millisecond)
 			continue
 		}

@@ -9,10 +9,6 @@ import {
   message,
   Popconfirm,
   Tooltip,
-  Card,
-  Row,
-  Col,
-  Statistic,
   Empty,
 } from 'antd';
 import {
@@ -62,7 +58,7 @@ const TaskList: React.FC = () => {
     run();
   }, [loadTimers]);
 
-  const handleAction = async (action: () => Promise<void>, msg: string) => {
+  const handleAction = async (action: () => Promise<unknown>, msg: string) => {
     try {
       await action();
       message.success(msg);
@@ -73,14 +69,14 @@ const TaskList: React.FC = () => {
   };
 
   const columns: ColumnsType<TimerDefinition> = [
-    { title: 'ID', dataIndex: 'id', width: 60 },
-    { title: '应用', dataIndex: 'app', width: 100 },
-    { title: '名称', dataIndex: 'name', width: 160, ellipsis: true },
+    { title: 'ID', dataIndex: 'id', width: 72, render: (id: number) => <span className="muted">#{id}</span> },
+    { title: '应用', dataIndex: 'app', width: 140, render: (app: string) => <span className="mono-chip">{app}</span> },
+    { title: '名称', dataIndex: 'name', width: 180, ellipsis: true, render: (name: string) => <strong>{name}</strong> },
     {
       title: 'Cron',
       dataIndex: 'cron_expr',
       width: 140,
-      render: (text: string) => <code style={{ fontSize: 12 }}>{text}</code>,
+      render: (text: string) => <code className="inline-code">{text}</code>,
     },
     { title: '回调地址', dataIndex: 'callback_url', width: 220, ellipsis: true },
     {
@@ -89,11 +85,10 @@ const TaskList: React.FC = () => {
       width: 80,
       render: (status: TimerStatus) => {
         const config = TIMER_STATUS_CONFIG[status];
-        return <Tag color={config?.color}>{config?.label || status}</Tag>;
+        return <Tag color={config?.color} className="status-tag">{config?.label || status}</Tag>;
       },
     },
     { title: '超时', dataIndex: 'timeout', width: 60, render: (v: number) => `${v}s` },
-    { title: '重试', dataIndex: 'max_retries', width: 60 },
     {
       title: '操作',
       key: 'action',
@@ -102,22 +97,22 @@ const TaskList: React.FC = () => {
         <Space size={4}>
           {record.status === 'ACTIVE' ? (
             <Tooltip title="停用">
-              <Button type="text" size="small" icon={<PauseCircleOutlined />}
+              <Button className="icon-button" type="text" size="small" icon={<PauseCircleOutlined />}
                 onClick={() => handleAction(() => deactivateTimer(record.id), '停用成功')} />
             </Tooltip>
           ) : record.status === 'INACTIVE' ? (
             <Tooltip title="激活">
-              <Button type="text" size="small" icon={<PlayCircleOutlined />}
+              <Button className="icon-button" type="text" size="small" icon={<PlayCircleOutlined />}
                 onClick={() => handleAction(() => activateTimer(record.id), '激活成功')} />
             </Tooltip>
           ) : null}
           <Tooltip title="编辑">
-            <Button type="text" size="small" icon={<EditOutlined />}
+            <Button className="icon-button" type="text" size="small" icon={<EditOutlined />}
               onClick={() => navigate(`/tasks/edit/${record.id}`)} />
           </Tooltip>
           <Popconfirm title="确定删除？" onConfirm={() => handleAction(() => deleteTimer(record.id), '删除成功')}>
             <Tooltip title="删除">
-              <Button type="text" size="small" danger icon={<DeleteOutlined />} />
+              <Button className="icon-button" type="text" size="small" danger icon={<DeleteOutlined />} />
             </Tooltip>
           </Popconfirm>
         </Space>
@@ -126,58 +121,64 @@ const TaskList: React.FC = () => {
   ];
 
   return (
-    <div>
-      <Row gutter={16} style={{ marginBottom: 20 }}>
-        <Col span={8}>
-          <Card size="small"><Statistic title="总计" value={stats.total} /></Card>
-        </Col>
-        <Col span={8}>
-          <Card size="small"><Statistic title="已激活" value={stats.active} valueStyle={{ color: '#3f8600' }} /></Card>
-        </Col>
-        <Col span={8}>
-          <Card size="small"><Statistic title="未激活" value={stats.inactive} /></Card>
-        </Col>
-      </Row>
+    <div className="page-stack">
+      <div className="metric-grid three">
+        <div className="metric-tile">
+          <span>总计</span>
+          <strong>{stats.total}</strong>
+        </div>
+        <div className="metric-tile">
+          <span>已激活</span>
+          <strong className="success-text">{stats.active}</strong>
+        </div>
+        <div className="metric-tile">
+          <span>未激活</span>
+          <strong>{stats.inactive}</strong>
+        </div>
+      </div>
 
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
-        <Space>
+      <div className="surface">
+        <div className="toolbar">
+          <Space wrap>
           <Input
             placeholder="搜索名称"
             prefix={<SearchOutlined />}
-            style={{ width: 200 }}
+            className="toolbar-control"
             onChange={(e) => setParams({ ...params, keyword: e.target.value, page: 1 })}
             allowClear
           />
           <Select
             placeholder="状态"
-            style={{ width: 100 }}
+            className="toolbar-select"
             allowClear
             onChange={(value) => setParams({ ...params, status: value, page: 1 })}
             options={Object.entries(TIMER_STATUS_CONFIG).map(([k, v]) => ({ label: v.label, value: k }))}
           />
-        </Space>
-        <Space>
+          </Space>
+          <Space>
           <Button icon={<ReloadOutlined />} onClick={loadTimers}>刷新</Button>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/tasks/create')}>创建</Button>
-        </Space>
-      </div>
+          </Space>
+        </div>
 
-      <Table
-        columns={columns}
-        dataSource={timers}
-        rowKey="id"
-        loading={loading}
-        size="middle"
-        pagination={{
-          current: params.page,
-          pageSize: params.page_size,
-          total,
-          showSizeChanger: true,
-          showTotal: (t) => `共 ${t} 条`,
-          onChange: (p, ps) => setParams({ ...params, page: p, page_size: ps }),
-        }}
-        locale={{ emptyText: <Empty description="暂无数据" /> }}
-      />
+        <Table
+          columns={columns}
+          dataSource={timers}
+          rowKey="id"
+          loading={loading}
+          size="middle"
+          scroll={{ x: 980 }}
+          pagination={{
+            current: params.page,
+            pageSize: params.page_size,
+            total,
+            showSizeChanger: true,
+            showTotal: (t) => `共 ${t} 条`,
+            onChange: (p, ps) => setParams({ ...params, page: p, page_size: ps }),
+          }}
+          locale={{ emptyText: <Empty description="暂无数据" /> }}
+        />
+      </div>
     </div>
   );
 };

@@ -175,7 +175,7 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 		record.ResponseCode = responseCode
 		record.ResponseBody = responseBody
 
-		// Bloom Filter 打点（仅成功时写入，避免失败任务被标记为已执行导致无法重试）
+		// Bloom Filter 打点（仅成功时写入，避免失败任务被误判为已完成）
 		if err := e.bloom.Set(ctx, bloomKey, bloomVal, 86400); err != nil {
 			logger.Error("Executor Bloom Filter 设置失败",
 				zap.Int64("timer_id", timerID),

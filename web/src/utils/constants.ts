@@ -13,7 +13,6 @@ export const RECORD_STATUS_CONFIG: Record<RecordStatus, { label: string; color: 
   RUNNING: { label: '执行中', color: 'processing' },
   SUCCESS: { label: '成功', color: 'success' },
   FAILED: { label: '失败', color: 'error' },
-  RETRYING: { label: '重试中', color: 'warning' },
   TIMEOUT: { label: '超时', color: 'error' },
 };
 

@@ -24,8 +24,7 @@ POST /api/v1/timers
   "callback_method": "POST",
   "callback_body": "{\"action\": \"check_orders\"}",
   "callback_headers": {"Authorization": "Bearer token123"},
-  "timeout": 30,
-  "max_retries": 3
+  "timeout": 30
 }
 ```
 
@@ -46,7 +45,6 @@ POST /api/v1/timers
     "callback_headers": "{\"Authorization\":\"Bearer token123\"}",
     "status": "INACTIVE",
     "timeout": 30,
-    "max_retries": 3,
     "created_at": "2026-05-22T10:00:00Z",
     "updated_at": "2026-05-22T10:00:00Z"
   }

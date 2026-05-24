@@ -1,9 +1,10 @@
-import React, { useState } from 'react';
-import { Layout, Menu, theme } from 'antd';
+import React from 'react';
+import { Layout, Menu, Button } from 'antd';
 import {
   ScheduleOutlined,
   HistoryOutlined,
   ClockCircleOutlined,
+  PlusOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 
@@ -15,56 +16,56 @@ const menuItems = [
 ];
 
 const MainLayout: React.FC = () => {
-  const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const { token: { colorBgContainer } } = theme.useToken();
 
-  const pageTitle = location.pathname === '/tasks' ? '任务管理' : '执行记录';
+  const pageMeta = location.pathname.startsWith('/executions')
+    ? { title: '执行记录', desc: '查看回调状态、耗时和失败原因' }
+    : location.pathname.includes('/create')
+      ? { title: '创建任务', desc: '配置 Cron、回调和执行超时' }
+      : location.pathname.includes('/edit')
+        ? { title: '编辑任务', desc: '调整任务定义和执行参数' }
+        : { title: '任务管理', desc: '管理定时任务定义、状态和回调目标' };
 
   return (
-    <Layout style={{ minHeight: '100vh' }}>
-      <Sider
-        collapsible
-        collapsed={collapsed}
-        onCollapse={setCollapsed}
-        theme="dark"
-        width={200}
-        style={{ position: 'fixed', height: '100vh', left: 0, top: 0, bottom: 0 }}
-      >
-        <div style={{
-          height: 48,
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 8,
-          color: '#fff',
-          fontSize: collapsed ? 18 : 16,
-          fontWeight: 600,
-          borderBottom: '1px solid rgba(255,255,255,0.1)',
-        }}>
-          <ClockCircleOutlined />
-          {!collapsed && 'ChronoFlow'}
+    <Layout className="app-shell">
+      <Sider width={248} className="app-sidebar" breakpoint="lg" collapsedWidth={0}>
+        <div className="brand">
+          <span className="brand-mark"><ClockCircleOutlined /></span>
+          <div>
+            <div className="brand-title">ChronoFlow</div>
+            <div className="brand-subtitle">Timer orchestration</div>
+          </div>
         </div>
         <Menu
-          theme="dark"
-          selectedKeys={[location.pathname]}
+          mode="inline"
+          selectedKeys={[location.pathname.startsWith('/executions') ? '/executions' : '/tasks']}
           items={menuItems}
           onClick={({ key }) => navigate(key)}
-          style={{ borderRight: 0 }}
+          className="side-menu"
         />
+        <div className="sidebar-footer">
+          <div className="sidebar-label">Runtime</div>
+          <div className="runtime-pill">API /api/v1</div>
+        </div>
       </Sider>
-      <Layout style={{ marginLeft: collapsed ? 80 : 200, transition: 'margin 0.2s' }}>
-        <Header style={{
-          padding: '0 24px',
-          background: colorBgContainer,
-          display: 'flex',
-          alignItems: 'center',
-          borderBottom: '1px solid #f0f0f0',
-        }}>
-          <h2 style={{ margin: 0, fontSize: 16, fontWeight: 500 }}>{pageTitle}</h2>
+      <Layout className="main-pane">
+        <Header className="app-header">
+          <div>
+            <h1>{pageMeta.title}</h1>
+            <p>{pageMeta.desc}</p>
+          </div>
+          {!location.pathname.includes('/create') && !location.pathname.includes('/edit') && (
+            <Button
+              type="primary"
+              icon={<PlusOutlined />}
+              onClick={() => navigate('/tasks/create')}
+            >
+              新建任务
+            </Button>
+          )}
         </Header>
-        <Content style={{ margin: 24, minHeight: 280 }}>
+        <Content className="app-content">
           <Outlet />
         </Content>
       </Layout>

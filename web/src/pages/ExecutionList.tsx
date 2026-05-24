@@ -10,10 +10,6 @@ import {
   Modal,
   Descriptions,
   Empty,
-  Card,
-  Row,
-  Col,
-  Statistic,
 } from 'antd';
 import {
   ReloadOutlined,
@@ -29,11 +25,11 @@ import { getRecords } from '../api/executions';
 import { RECORD_STATUS_CONFIG } from '../utils/constants';
 
 const statusIcon: Record<string, React.ReactNode> = {
-  SUCCESS: <CheckCircleOutlined style={{ color: '#52c41a' }} />,
-  FAILED: <CloseCircleOutlined style={{ color: '#cf1322' }} />,
-  RUNNING: <SyncOutlined spin style={{ color: '#1677ff' }} />,
-  PENDING: <ClockCircleOutlined style={{ color: '#8c8c8c' }} />,
-  RETRYING: <SyncOutlined style={{ color: '#d48806' }} />,
+  SUCCESS: <CheckCircleOutlined className="success-text" />,
+  FAILED: <CloseCircleOutlined className="danger-text" />,
+  RUNNING: <SyncOutlined spin className="info-text" />,
+  PENDING: <ClockCircleOutlined className="muted" />,
+  TIMEOUT: <CloseCircleOutlined className="danger-text" />,
 };
 
 const ExecutionList: React.FC = () => {
@@ -71,12 +67,12 @@ const ExecutionList: React.FC = () => {
   }, [loadRecords]);
 
   const columns: ColumnsType<TimerRecord> = [
-    { title: 'ID', dataIndex: 'id', width: 60 },
+    { title: 'ID', dataIndex: 'id', width: 72, render: (id: number) => <span className="muted">#{id}</span> },
     {
       title: '定时器',
       dataIndex: 'timer_id',
       width: 80,
-      render: (id: number) => `#${id}`,
+      render: (id: number) => <span className="mono-chip">#{id}</span>,
     },
     {
       title: '触发时间',
@@ -93,16 +89,10 @@ const ExecutionList: React.FC = () => {
         return (
           <Space size={4}>
             {statusIcon[status]}
-            <Tag color={config?.color}>{config?.label || status}</Tag>
+            <Tag color={config?.color} className="status-tag">{config?.label || status}</Tag>
           </Space>
         );
       },
-    },
-    {
-      title: '重试',
-      dataIndex: 'retry_count',
-      width: 60,
-      render: (n: number) => n || '-',
     },
     {
       title: '请求',
@@ -132,7 +122,7 @@ const ExecutionList: React.FC = () => {
       width: 50,
       render: (_, record) => (
         <Tooltip title="详情">
-          <Button type="text" size="small" icon={<EyeOutlined />}
+          <Button className="icon-button" type="text" size="small" icon={<EyeOutlined />}
             onClick={() => { setSelected(record); setDetailVisible(true); }} />
         </Tooltip>
       ),
@@ -140,59 +130,65 @@ const ExecutionList: React.FC = () => {
   ];
 
   return (
-    <div>
-      <Row gutter={16} style={{ marginBottom: 20 }}>
-        <Col span={6}>
-          <Card size="small"><Statistic title="总计" value={stats.total} /></Card>
-        </Col>
-        <Col span={6}>
-          <Card size="small"><Statistic title="成功" value={stats.success} valueStyle={{ color: '#3f8600' }} /></Card>
-        </Col>
-        <Col span={6}>
-          <Card size="small"><Statistic title="失败" value={stats.failed} valueStyle={{ color: '#cf1322' }} /></Card>
-        </Col>
-        <Col span={6}>
-          <Card size="small"><Statistic title="运行中" value={stats.running} /></Card>
-        </Col>
-      </Row>
+    <div className="page-stack">
+      <div className="metric-grid four">
+        <div className="metric-tile">
+          <span>总计</span>
+          <strong>{stats.total}</strong>
+        </div>
+        <div className="metric-tile">
+          <span>成功</span>
+          <strong className="success-text">{stats.success}</strong>
+        </div>
+        <div className="metric-tile">
+          <span>失败</span>
+          <strong className="danger-text">{stats.failed}</strong>
+        </div>
+        <div className="metric-tile">
+          <span>运行中</span>
+          <strong>{stats.running}</strong>
+        </div>
+      </div>
 
-      <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between' }}>
-        <Space>
+      <div className="surface">
+        <div className="toolbar">
+          <Space wrap>
           <Select
             placeholder="定时器ID"
-            style={{ width: 120 }}
+            className="toolbar-select"
             allowClear
             showSearch
             onChange={(v) => setParams({ ...params, timer_id: v, page: 1 })}
           />
           <Select
             placeholder="状态"
-            style={{ width: 100 }}
+            className="toolbar-select"
             allowClear
             onChange={(v) => setParams({ ...params, status: v, page: 1 })}
             options={Object.entries(RECORD_STATUS_CONFIG).map(([k, v]) => ({ label: v.label, value: k }))}
           />
-        </Space>
-        <Button icon={<ReloadOutlined />} onClick={loadRecords}>刷新</Button>
-      </div>
+          </Space>
+          <Button icon={<ReloadOutlined />} onClick={loadRecords}>刷新</Button>
+        </div>
 
-      <Table
-        columns={columns}
-        dataSource={records}
-        rowKey="id"
-        loading={loading}
-        size="middle"
-        scroll={{ x: 1000 }}
-        pagination={{
-          current: params.page,
-          pageSize: params.page_size,
-          total,
-          showSizeChanger: true,
-          showTotal: (t) => `共 ${t} 条`,
-          onChange: (p, ps) => setParams({ ...params, page: p, page_size: ps }),
-        }}
-        locale={{ emptyText: <Empty description="暂无数据" /> }}
-      />
+        <Table
+          columns={columns}
+          dataSource={records}
+          rowKey="id"
+          loading={loading}
+          size="middle"
+          scroll={{ x: 1000 }}
+          pagination={{
+            current: params.page,
+            pageSize: params.page_size,
+            total,
+            showSizeChanger: true,
+            showTotal: (t) => `共 ${t} 条`,
+            onChange: (p, ps) => setParams({ ...params, page: p, page_size: ps }),
+          }}
+          locale={{ emptyText: <Empty description="暂无数据" /> }}
+        />
+      </div>
 
       <Modal
         title="执行详情"
@@ -200,6 +196,7 @@ const ExecutionList: React.FC = () => {
         onCancel={() => setDetailVisible(false)}
         footer={null}
         width={700}
+        className="detail-modal"
       >
         {selected && (
           <Descriptions bordered column={2} size="small">
@@ -209,28 +206,27 @@ const ExecutionList: React.FC = () => {
               {new Date(selected.trigger_time).toLocaleString('zh-CN')}
             </Descriptions.Item>
             <Descriptions.Item label="状态">
-              <Tag color={RECORD_STATUS_CONFIG[selected.status]?.color}>
+              <Tag color={RECORD_STATUS_CONFIG[selected.status]?.color} className="status-tag">
                 {RECORD_STATUS_CONFIG[selected.status]?.label}
               </Tag>
             </Descriptions.Item>
-            <Descriptions.Item label="重试">{selected.retry_count}</Descriptions.Item>
             <Descriptions.Item label="响应码">{selected.response_code || '-'}</Descriptions.Item>
             <Descriptions.Item label="耗时">{selected.duration ? `${selected.duration}ms` : '-'}</Descriptions.Item>
             <Descriptions.Item label="方法">{selected.request_method}</Descriptions.Item>
             <Descriptions.Item label="URL" span={2}>{selected.request_url}</Descriptions.Item>
             <Descriptions.Item label="请求体" span={2}>
-              <pre style={{ margin: 0, maxHeight: 100, overflow: 'auto', fontSize: 12 }}>
+              <pre className="code-block">
                 {selected.request_body || '-'}
               </pre>
             </Descriptions.Item>
             <Descriptions.Item label="响应体" span={2}>
-              <pre style={{ margin: 0, maxHeight: 100, overflow: 'auto', fontSize: 12 }}>
+              <pre className="code-block">
                 {selected.response_body || '-'}
               </pre>
             </Descriptions.Item>
             {selected.error_message && (
               <Descriptions.Item label="错误" span={2}>
-                <span style={{ color: '#cf1322' }}>{selected.error_message}</span>
+                <span className="danger-text">{selected.error_message}</span>
               </Descriptions.Item>
             )}
             <Descriptions.Item label="开始">

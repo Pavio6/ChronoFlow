@@ -4,14 +4,12 @@ import {
   Input,
   Select,
   Button,
-  Card,
   InputNumber,
   Space,
   message,
   Typography,
   Row,
   Col,
-  Divider,
 } from 'antd';
 import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeftOutlined } from '@ant-design/icons';
@@ -31,7 +29,6 @@ interface FormValues {
   callback_body?: string;
   callback_headers?: string;
   timeout: number;
-  max_retries: number;
 }
 
 const TaskForm: React.FC = () => {
@@ -53,7 +50,7 @@ const TaskForm: React.FC = () => {
           callback_url: t.callback_url, callback_method: t.callback_method,
           callback_body: t.callback_body,
           callback_headers: JSON.stringify(headers, null, 2),
-          timeout: t.timeout, max_retries: t.max_retries,
+          timeout: t.timeout,
         });
       }
     } catch (error: unknown) {
@@ -96,28 +93,31 @@ const TaskForm: React.FC = () => {
   };
 
   return (
-    <div>
+    <div className="page-stack form-page">
       <Button
-        type="link"
+        type="text"
         icon={<ArrowLeftOutlined />}
         onClick={() => navigate('/tasks')}
-        style={{ padding: 0, marginBottom: 16 }}
+        className="back-button"
       >
         返回
       </Button>
 
-      <Card>
+      <div className="surface form-surface">
         <Form
           form={form}
           layout="vertical"
           onFinish={handleSubmit}
-          initialValues={{ app: 'default', callback_method: 'POST', timeout: 30, max_retries: 3 }}
-          style={{ maxWidth: 680 }}
+          initialValues={{ app: 'default', callback_method: 'POST', timeout: 30 }}
+          className="task-form"
         >
-          <Divider orientation="left" plain>基本信息</Divider>
+          <div className="form-section-heading">
+            <h2>基本信息</h2>
+            <p>定义任务所属应用、名称和触发节奏。</p>
+          </div>
 
           <Row gutter={16}>
-            <Col span={12}>
+            <Col xs={24} md={12}>
               <Form.Item name="app" label="应用" rules={[{ required: true }]}>
                 <Select
                   showSearch
@@ -126,7 +126,7 @@ const TaskForm: React.FC = () => {
                 />
               </Form.Item>
             </Col>
-            <Col span={12}>
+            <Col xs={24} md={12}>
               <Form.Item name="name" label="名称" rules={[{ required: true }]}>
                 <Input placeholder="定时器名称" maxLength={128} />
               </Form.Item>
@@ -151,10 +151,13 @@ const TaskForm: React.FC = () => {
             </Space.Compact>
           </Form.Item>
 
-          <Divider orientation="left" plain>回调配置</Divider>
+          <div className="form-section-heading">
+            <h2>回调配置</h2>
+            <p>任务触发时会按这里的 HTTP 参数发起请求。</p>
+          </div>
 
           <Row gutter={16}>
-            <Col span={16}>
+            <Col xs={24} md={16}>
               <Form.Item
                 name="callback_url"
                 label="URL"
@@ -163,7 +166,7 @@ const TaskForm: React.FC = () => {
                 <Input placeholder="https://api.example.com/callback" />
               </Form.Item>
             </Col>
-            <Col span={8}>
+            <Col xs={24} md={8}>
               <Form.Item name="callback_method" label="方法" rules={[{ required: true }]}>
                 <Select options={HTTP_METHODS.map(m => ({ label: m, value: m }))} />
               </Form.Item>
@@ -178,22 +181,20 @@ const TaskForm: React.FC = () => {
             <TextArea placeholder='{"Authorization": "Bearer xxx"}' rows={2} style={{ fontFamily: 'monospace' }} />
           </Form.Item>
 
-          <Divider orientation="left" plain>执行配置</Divider>
+          <div className="form-section-heading">
+            <h2>执行配置</h2>
+            <p>控制回调请求的超时时间。</p>
+          </div>
 
           <Row gutter={16}>
-            <Col span={12}>
+            <Col xs={24} md={12}>
               <Form.Item name="timeout" label="超时 (秒)" rules={[{ required: true }]}>
                 <InputNumber min={1} max={300} style={{ width: '100%' }} />
               </Form.Item>
             </Col>
-            <Col span={12}>
-              <Form.Item name="max_retries" label="最大重试" rules={[{ required: true }]}>
-                <InputNumber min={0} max={10} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
           </Row>
 
-          <Form.Item>
+          <Form.Item className="form-actions">
             <Space>
               <Button type="primary" htmlType="submit" loading={loading}>
                 {isEdit ? '更新' : '创建'}
@@ -202,7 +203,7 @@ const TaskForm: React.FC = () => {
             </Space>
           </Form.Item>
         </Form>
-      </Card>
+      </div>
     </div>
   );
 };

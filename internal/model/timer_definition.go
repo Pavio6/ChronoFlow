@@ -26,7 +26,6 @@ type TimerDefinition struct {
 	CallbackHeaders string      `gorm:"type:text;comment:回调请求头(JSON)" json:"callback_headers"`
 	Status          TimerStatus `gorm:"size:32;not null;default:INACTIVE;comment:状态" json:"status"`
 	Timeout         int         `gorm:"default:30;comment:超时时间(秒)" json:"timeout"`
-	MaxRetries      int         `gorm:"default:3;comment:最大重试次数" json:"max_retries"`
 	CreatedAt       time.Time   `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt       time.Time   `gorm:"autoUpdateTime" json:"updated_at"`
 }
@@ -46,7 +45,6 @@ type CreateTimerDefinitionRequest struct {
 	CallbackBody    string            `json:"callback_body"`
 	CallbackHeaders map[string]string `json:"callback_headers"`
 	Timeout         int               `json:"timeout" binding:"min=1,max=300"`
-	MaxRetries      int               `json:"max_retries" binding:"min=0,max=10"`
 }
 
 // UpdateTimerDefinitionRequest 更新定时器请求（使用指针字段实现部分更新）
@@ -58,7 +56,6 @@ type UpdateTimerDefinitionRequest struct {
 	CallbackBody    *string            `json:"callback_body"`
 	CallbackHeaders *map[string]string `json:"callback_headers"`
 	Timeout         *int               `json:"timeout" binding:"omitempty,min=1,max=300"`
-	MaxRetries      *int               `json:"max_retries" binding:"omitempty,min=0,max=10"`
 }
 
 // TimerDefinitionListRequest 定时器列表查询请求

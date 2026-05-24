@@ -244,7 +244,7 @@ Executor.Execute(trigger)
     ↓
 执行 HTTP 回调
     ↓
-更新状态: RUNNING → SUCCESS/FAILED/RETRYING
+更新状态: RUNNING → SUCCESS/FAILED
     ↓
 执行成功 → Bloom Filter 打点（仅成功时写入）
 ```
