@@ -1,240 +1,133 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Button, Empty, message, Progress, Space, Spin, Tag } from 'antd';
-import {
-  ClockCircleOutlined,
-  CloudServerOutlined,
-  DatabaseOutlined,
-  ReloadOutlined,
-  ThunderboltOutlined,
-} from '@ant-design/icons';
-import { getMonitoringSummary } from '../api/monitoring';
-import type { MonitoringSummary } from '../types';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Button, Empty, Select, Space, Tag } from 'antd';
+import { ReloadOutlined } from '@ant-design/icons';
+import { getMonitoringHistory } from '../api/monitoring';
+import type { MonitoringHistory, MonitoringPoint } from '../types';
 
-const numberFormat = new Intl.NumberFormat('zh-CN');
-const HISTORY_LIMIT = 12;
-
-interface SamplePoint {
-  label: string;
-  execTotal: number;
-  successRate: number;
-  avgDuration: number;
-  queueItems: number;
-  lockKeys: number;
-}
+const rangeOptions = [
+  { label: '最近 15 分钟', value: 15 },
+  { label: '最近 1 小时', value: 60 },
+  { label: '最近 6 小时', value: 360 },
+  { label: '最近 24 小时', value: 1440 },
+];
 
 const Monitoring: React.FC = () => {
-  const [loading, setLoading] = useState(false);
-  const [summary, setSummary] = useState<MonitoringSummary | null>(null);
-  const [history, setHistory] = useState<SamplePoint[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [history, setHistory] = useState<MonitoringHistory | null>(null);
+  const [historyUnavailable, setHistoryUnavailable] = useState(false);
+  const [rangeMinutes, setRangeMinutes] = useState(60);
+  const historyRequestID = useRef(0);
 
-  const loadSummary = useCallback(async () => {
-    setLoading(true);
+  const loadHistory = useCallback(async () => {
+    const requestID = ++historyRequestID.current;
+    setHistoryLoading(true);
     try {
-      const data = await getMonitoringSummary();
-      setSummary(data);
-      setHistory((items) => {
-        const next = [
-          ...items,
-          {
-            label: new Date().toLocaleTimeString('zh-CN', { hour12: false, minute: '2-digit', second: '2-digit' }),
-            execTotal: data.runtime.exec_total,
-            successRate: data.runtime.success_rate * 100,
-            avgDuration: data.runtime.avg_duration_ms,
-            queueItems: data.redis.queue_items,
-            lockKeys: data.redis.lock_keys,
-          },
-        ];
-        return next.slice(-HISTORY_LIMIT);
-      });
-    } catch (error: unknown) {
-      message.error((error as Error).message || '加载监控数据失败');
+      const data = await getMonitoringHistory(rangeMinutes);
+      if (requestID !== historyRequestID.current) {
+        return;
+      }
+      setHistory(data);
+      setHistoryUnavailable(false);
+    } catch {
+      if (requestID === historyRequestID.current) {
+        setHistoryUnavailable(true);
+      }
     } finally {
-      setLoading(false);
+      if (requestID === historyRequestID.current) {
+        setHistoryLoading(false);
+      }
     }
-  }, []);
+  }, [rangeMinutes]);
 
   useEffect(() => {
-    const run = async () => { await loadSummary(); };
-    run();
-    const timer = window.setInterval(loadSummary, 10000);
+    loadHistory();
+    const timer = window.setInterval(loadHistory, 10000);
     return () => window.clearInterval(timer);
-  }, [loadSummary]);
+  }, [loadHistory]);
 
-  if (!summary && loading) {
-    return <div className="surface monitor-loading"><Spin /></div>;
-  }
-
-  if (!summary) {
-    return (
-      <div className="surface monitor-empty">
-        <Empty description="暂无监控数据" />
-        <Button icon={<ReloadOutlined />} onClick={loadSummary}>刷新</Button>
-      </div>
-    );
-  }
-
-  const successPercent = Math.round(summary.runtime.success_rate * 100);
-  const recordTotal = Math.max(summary.records.total, 1);
-  const recordSegments = [
-    { label: '成功', value: summary.records.success, color: '#16a34a' },
-    { label: '失败', value: summary.records.failed, color: '#dc2626' },
-    { label: '执行中', value: summary.records.running, color: '#2563eb' },
-    { label: '等待中', value: summary.records.pending, color: '#a1a1aa' },
-  ];
+  const historySeries = history?.series;
+  const availability = latestValue(historySeries?.availability);
 
   return (
     <div className="page-stack monitor-page">
-      <div className="monitor-hero">
-        <div>
-          <span className="monitor-kicker">Prometheus exporter</span>
-          <h2>{summary.exporter}</h2>
-          <p>当前页面展示后端聚合后的进程运行快照，每 10 秒自动刷新；长期趋势请接入 Prometheus。</p>
-        </div>
+      <div className="monitor-toolbar">
+        <p>趋势数据由 Prometheus 持久化保存，每 10 秒自动刷新</p>
         <Space>
-          <Tag color="default">{summary.runtime.last_collected_msg}</Tag>
-          <Button icon={<ReloadOutlined />} loading={loading} onClick={loadSummary}>刷新</Button>
+          <Tag color={historyUnavailable ? 'error' : history === null ? 'processing' : 'success'}>
+            {historyUnavailable ? '历史数据不可用' : history === null ? '历史数据加载中' : 'Prometheus connected'}
+          </Tag>
+          <Select value={rangeMinutes} options={rangeOptions} onChange={setRangeMinutes} className="history-range" />
+          <Button icon={<ReloadOutlined />} loading={historyLoading} onClick={loadHistory}>刷新</Button>
         </Space>
-      </div>
-
-      <div className="metric-grid four">
-        <Metric title="活跃任务" value={summary.timers.active} icon={<ClockCircleOutlined />} />
-        <Metric title="执行总数" value={summary.runtime.exec_total} icon={<DatabaseOutlined />} />
-        <Metric title="触发次数" value={summary.runtime.trigger_total} icon={<ThunderboltOutlined />} />
-        <Metric title="队列任务" value={summary.redis.queue_items} icon={<CloudServerOutlined />} />
       </div>
 
       <div className="monitor-grid">
         <section className="surface monitor-panel">
           <div className="panel-heading">
-            <h3>执行质量</h3>
-            <span>{summary.runtime.exec_total} total</span>
+            <h3>服务可用性</h3>
+            <HealthStat
+              label="采集状态"
+              value={availability === undefined ? '--' : availability === 1 ? 'UP' : 'DOWN'}
+              healthy={availability === undefined ? undefined : availability === 1}
+            />
           </div>
-          <div className="success-ring">
-            <Progress type="circle" percent={successPercent} size={132} strokeColor="#16a34a" />
-            <div>
-              <strong>{summary.runtime.avg_duration_ms.toFixed(1)} ms</strong>
-              <span>平均执行耗时</span>
-            </div>
-          </div>
-          <div className="split-stats">
-            <SmallStat label="成功" value={summary.runtime.exec_success} tone="success" />
-            <SmallStat label="失败" value={summary.runtime.exec_failed} tone="danger" />
-          </div>
+          <LineChart
+            title="Prometheus scrape"
+            points={values(historySeries?.availability)}
+            labels={labels(historySeries?.availability)}
+            color="#16a34a"
+            displayValue={(value) => value === 1 ? 'UP' : 'DOWN'}
+          />
         </section>
 
         <section className="surface monitor-panel">
           <div className="panel-heading">
             <h3>成功率趋势</h3>
-            <span>{history.length} samples</span>
+            <span>{historySeries?.success_rate.length || 0} samples</span>
           </div>
           <LineChart
-            points={history.map((item) => item.successRate)}
-            labels={history.map((item) => item.label)}
+            points={values(historySeries?.success_rate)}
+            labels={labels(historySeries?.success_rate)}
             suffix="%"
             color="#16a34a"
           />
         </section>
 
-        <section className="surface monitor-panel wide">
+        <section className="surface monitor-panel">
           <div className="panel-heading">
-            <h3>吞吐趋势</h3>
-            <span>exec total / avg duration</span>
+            <h3>回调延迟</h3>
+            <span>P95 latency</span>
           </div>
-          <div className="dual-chart">
-            <LineChart
-              title="累计执行"
-              points={history.map((item) => item.execTotal)}
-              labels={history.map((item) => item.label)}
-              color="#18181b"
-            />
-            <LineChart
-              title="平均耗时"
-              points={history.map((item) => item.avgDuration)}
-              labels={history.map((item) => item.label)}
-              suffix="ms"
-              color="#2563eb"
-            />
-          </div>
+          <LineChart
+            title="P95 延迟"
+            points={values(historySeries?.callback_p95_ms)}
+            labels={labels(historySeries?.callback_p95_ms)}
+            suffix="ms"
+            color="#2563eb"
+          />
         </section>
 
-        <section className="surface monitor-panel wide">
+        <section className="surface monitor-panel">
           <div className="panel-heading">
-            <h3>Redis 调度面趋势</h3>
-            <span>queue items / lock keys</span>
+            <h3>异常任务</h3>
+            <span>overdue or stale</span>
           </div>
-          <div className="dual-chart">
-            <LineChart
-              title="队列任务"
-              points={history.map((item) => item.queueItems)}
-              labels={history.map((item) => item.label)}
-              color="#d97706"
-            />
-            <LineChart
-              title="锁数量"
-              points={history.map((item) => item.lockKeys)}
-              labels={history.map((item) => item.label)}
-              color="#71717a"
-            />
-          </div>
-          <div className="redis-grid">
-            <SmallStat label="队列 Key" value={summary.redis.queue_keys} />
-            <SmallStat label="队列成员" value={summary.redis.queue_items} />
-            <SmallStat label="锁 Key" value={summary.redis.lock_keys} />
-            <SmallStat label="分桶 Key" value={summary.redis.bucket_keys} />
-          </div>
-        </section>
-
-        <section className="surface monitor-panel wide">
-          <div className="panel-heading">
-            <h3>执行结果分布</h3>
-            <span>{summary.records.total} records</span>
-          </div>
-          <div className="distribution-bar">
-            {recordSegments.map((item) => (
-              <span
-                key={item.label}
-                style={{
-                  width: `${Math.max((item.value / recordTotal) * 100, item.value > 0 ? 2 : 0)}%`,
-                  background: item.color,
-                }}
-              />
-            ))}
-          </div>
-          <div className="legend-grid">
-            {recordSegments.map((item) => (
-              <div key={item.label} className="legend-item">
-                <i style={{ background: item.color }} />
-                <span>{item.label}</span>
-                <strong>{numberFormat.format(item.value)}</strong>
-              </div>
-            ))}
-          </div>
+          <LineChart
+            title="超期或卡住记录"
+            points={values(historySeries?.abnormal_records)}
+            labels={labels(historySeries?.abnormal_records)}
+            color="#d97706"
+          />
         </section>
       </div>
     </div>
   );
 };
 
-interface MetricProps {
-  title: string;
-  value: number;
-  icon: React.ReactNode;
-}
-
-const Metric: React.FC<MetricProps> = ({ title, value, icon }) => (
-  <div className="metric-tile monitor-metric">
-    <span>{title}</span>
-    <strong>{numberFormat.format(value)}</strong>
-    <i>{icon}</i>
-  </div>
-);
-
-const SmallStat: React.FC<{ label: string; value: number; tone?: 'success' | 'danger' }> = ({ label, value, tone }) => (
-  <div className="small-stat">
+const HealthStat: React.FC<{ label: string; value: string; healthy?: boolean }> = ({ label, value, healthy }) => (
+  <div className="health-chip">
     <span>{label}</span>
-    <strong className={tone === 'success' ? 'success-text' : tone === 'danger' ? 'danger-text' : undefined}>
-      {numberFormat.format(value)}
-    </strong>
+    <strong className={healthy === undefined ? undefined : healthy ? 'success-text' : 'danger-text'}>{value}</strong>
   </div>
 );
 
@@ -244,10 +137,23 @@ interface LineChartProps {
   labels: string[];
   color: string;
   suffix?: string;
+  precision?: number;
+  displayValue?: (value: number) => string;
 }
 
-const LineChart: React.FC<LineChartProps> = ({ title, points, labels, color, suffix = '' }) => {
-  const normalized = points.length > 0 ? points : [0];
+const LineChart: React.FC<LineChartProps> = ({ title, points, labels, color, suffix = '', precision, displayValue }) => {
+  if (points.length === 0) {
+    return (
+      <div className="line-card chart-empty">
+        <div className="line-card-head">
+          <span>{title || '趋势'}</span>
+          <strong>--</strong>
+        </div>
+        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无历史数据" />
+      </div>
+    );
+  }
+  const normalized = points;
   const max = Math.max(...normalized, 1);
   const min = Math.min(...normalized, 0);
   const range = Math.max(max - min, 1);
@@ -268,7 +174,7 @@ const LineChart: React.FC<LineChartProps> = ({ title, points, labels, color, suf
     <div className="line-card">
       <div className="line-card-head">
         <span>{title || '趋势'}</span>
-        <strong>{latest.toFixed(suffix === '%' || suffix === 'ms' ? 1 : 0)}{suffix}</strong>
+        <strong>{displayValue ? displayValue(latest) : `${latest.toFixed(precision ?? (suffix === '%' || suffix === 'ms' ? 1 : 0))}${suffix}`}</strong>
       </div>
       <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title || '趋势图'}>
         <defs>
@@ -291,5 +197,13 @@ const LineChart: React.FC<LineChartProps> = ({ title, points, labels, color, suf
     </div>
   );
 };
+
+const values = (points?: MonitoringPoint[]): number[] => points?.map((item) => item.value) || [];
+
+const labels = (points?: MonitoringPoint[]): string[] => points?.map((item) => (
+  new Date(item.timestamp * 1000).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })
+)) || [];
+
+const latestValue = (points?: MonitoringPoint[]): number | undefined => points && points.length > 0 ? points[points.length - 1].value : undefined;
 
 export default Monitoring;
