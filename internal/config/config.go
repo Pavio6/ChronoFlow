@@ -41,7 +41,7 @@ type RedisConfig struct {
 
 // SchedulerConfig 调度器配置
 // migrate_step_minutes: Migrator 执行间隔（分钟）
-// step2_duration: 二级时间步（秒），内存缓存刷新间隔
+// step2_duration: 二级时间步（秒），本地定时器定义及状态缓存有效期
 // bucket_num: 分桶数量
 // scan_interval: Scheduler 轮询间隔（秒）
 // lock_expiration: 分布式锁初始 TTL（秒），必须大于时间片时长（60 秒）
@@ -119,7 +119,7 @@ func setDefaults() {
 
 	// 调度器默认配置
 	viper.SetDefault("scheduler.migrate_step_minutes", 60) // 60 分钟
-	viper.SetDefault("scheduler.step2_duration", 300)      // 5 分钟
+	viper.SetDefault("scheduler.step2_duration", 120)      // 2 分钟
 	viper.SetDefault("scheduler.bucket_num", 3)
 	viper.SetDefault("scheduler.scan_interval", 1)        // 1 秒
 	viper.SetDefault("scheduler.lock_expiration", 70)     // 70 秒，参考 xTimer tryLockSeconds

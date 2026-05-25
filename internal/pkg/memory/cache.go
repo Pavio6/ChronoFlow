@@ -13,7 +13,7 @@ type cacheEntry struct {
 	expireAt time.Time
 }
 
-// TimerCache 定时器定义的本地内存缓存（二级迁移架构）
+// TimerCache 定时器完整定义（包含状态）的本地内存缓存（二级迁移架构）
 // 使用读写锁保证并发安全，支持 TTL 过期和批量操作
 type TimerCache struct {
 	mu      sync.RWMutex

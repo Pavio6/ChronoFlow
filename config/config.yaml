@@ -21,8 +21,8 @@ redis:
 scheduler:
   # Migrator 执行间隔（分钟），默认 60 分钟
   migrate_step_minutes: 60
-  # 二级时间步（秒），内存缓存刷新间隔，默认 5 分钟
-  step2_duration: 300
+  # 二级时间步（秒），本地定时器定义及状态缓存有效期，默认 2 分钟
+  step2_duration: 120
   # 分桶数量（支持动态调整）
   bucket_num: 3
   # Scheduler 轮询间隔（秒）

@@ -25,8 +25,8 @@ import (
 // 被 Trigger 启动后，执行单个定时任务
 // 核心流程：
 //  1. Bloom Filter 快速过滤已成功执行任务；命中后由 MySQL 确认
-//  2. 从 MySQL 校验定时器当前仍处于 ACTIVE 状态
-//  3. 查询不可变的定时器定义（先内存缓存，miss 再 MySQL）
+//  2. 查询完整的定时器定义（先内存缓存，miss 再 MySQL）
+//  3. 使用定义中的状态判断是否仍处于 ACTIVE；缓存状态允许在 TTL 内滞后
 //  4. 原子抢占执行记录：只有 PENDING -> RUNNING 成功的执行器继续
 //  5. 执行 HTTP 回调
 //  6. 执行成功后写 Bloom Filter，并更新 MySQL 最终状态
@@ -38,6 +38,7 @@ type Executor struct {
 	reporter   *metrics.Reporter
 	httpClient *http.Client
 	cfg        *config.ExecutorConfig
+	cacheTTL   time.Duration
 }
 
 // NewExecutor 创建执行器实例
@@ -48,6 +49,7 @@ func NewExecutor(
 	cache *memory.TimerCache,
 	reporter *metrics.Reporter,
 	cfg *config.ExecutorConfig,
+	cacheTTL time.Duration,
 ) *Executor {
 	// 创建带超时的 HTTP 客户端
 	httpClient := &http.Client{
@@ -62,6 +64,7 @@ func NewExecutor(
 		reporter:   reporter,
 		httpClient: httpClient,
 		cfg:        cfg,
+		cacheTTL:   cacheTTL,
 	}
 }
 
@@ -104,26 +107,16 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 		}
 	}
 
-	// 状态是可变字段，必须读 MySQL；不能依赖可能滞后的节点本地定义缓存。
-	active, err := e.defRepo.IsActive(timerID)
-	if err != nil {
-		logger.Error("Executor 查询定时器状态失败",
-			zap.Int64("timer_id", timerID),
-			zap.Error(err),
-		)
-		return
-	}
-	if !active {
-		logger.Debug("Executor 定时器非激活状态，跳过",
-			zap.Int64("timer_id", timerID),
-		)
-		return
-	}
-
-	// 创建后配置不可修改，因此可安全复用配置缓存。
+	// 与 xTimer 一致，从包含状态的本地定义缓存读取；状态变更允许在缓存 TTL 内滞后。
 	def := e.getTimerDefinition(ctx, timerID)
 	if def == nil {
 		logger.Warn("Executor 定时器定义不存在",
+			zap.Int64("timer_id", timerID),
+		)
+		return
+	}
+	if def.Status != model.TimerStatusActive {
+		logger.Debug("Executor 定时器非激活状态，跳过",
 			zap.Int64("timer_id", timerID),
 		)
 		return
@@ -219,7 +212,7 @@ func isTimeoutError(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
-// getTimerDefinition 获取创建后不可变的执行配置（状态判断不使用该缓存）。
+// getTimerDefinition 获取包含状态的本地定义缓存；ACTIVE 状态可在 cacheTTL 内滞后。
 func (e *Executor) getTimerDefinition(ctx context.Context, timerID int64) *model.TimerDefinition {
 	// 先查内存缓存
 	if def, ok := e.cache.Get(timerID); ok {
@@ -240,8 +233,10 @@ func (e *Executor) getTimerDefinition(ctx context.Context, timerID int64) *model
 		return nil
 	}
 
-	// 写入缓存（TTL 为 step2_duration，即二级迁移间隔）
-	e.cache.Set(timerID, def, 5*time.Minute)
+	// 仅缓存激活定义。停用后旧缓存会在二级时间步内失效；重新激活时 miss 可直接回源。
+	if def.Status == model.TimerStatusActive {
+		e.cache.Set(timerID, def, e.cacheTTL)
+	}
 
 	return def
 }

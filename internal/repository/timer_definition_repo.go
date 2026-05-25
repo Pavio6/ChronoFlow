@@ -22,8 +22,6 @@ type TimerDefinitionRepository interface {
 	GetActiveDefinitions() ([]*model.TimerDefinition, error)
 	// UpdateStatus 更新定时器定义状态
 	UpdateStatus(id int64, status model.TimerStatus) error
-	// IsActive 查询定时器当前是否处于可执行状态，不使用本地缓存
-	IsActive(id int64) (bool, error)
 	// CountByStatus 按定时器状态统计数量
 	CountByStatus() (map[model.TimerStatus]int64, error)
 }
@@ -140,17 +138,6 @@ func (r *timerDefinitionRepo) UpdateStatus(id int64, status model.TimerStatus) e
 		return fmt.Errorf("定时器定义不存在，id=%d", id)
 	}
 	return nil
-}
-
-// IsActive 查询数据库中的实时状态，保证停用或删除后不执行已打点任务。
-func (r *timerDefinitionRepo) IsActive(id int64) (bool, error) {
-	var count int64
-	if err := r.db.Model(&model.TimerDefinition{}).
-		Where("id = ? AND status = ?", id, model.TimerStatusActive).
-		Count(&count).Error; err != nil {
-		return false, fmt.Errorf("查询定时器激活状态失败: %w", err)
-	}
-	return count > 0, nil
 }
 
 // CountByStatus 按定时器状态统计数量

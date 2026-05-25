@@ -240,13 +240,13 @@ func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucke
    ├─ miss/查询失败 → 继续
    └─ hit → MySQL 确认已处理则跳过；若为误判则继续
 
-2. 查询 MySQL 中的实时状态
-   ├─ ACTIVE → 继续执行
-   └─ INACTIVE/DELETED → 跳过，不删除 Redis ZSet 中已打点数据
-
-3. 查询不可变的定时器执行配置
+2. 查询包含状态的定时器定义
    ├─ 内存缓存命中 → 直接使用
    └─ 缓存未命中 → 查 MySQL → 写入缓存
+
+3. 使用定义状态判断是否执行
+   ├─ ACTIVE → 继续执行
+   └─ INACTIVE/DELETED → 跳过，不删除 Redis ZSet 中已打点数据
 
 4. 原子状态抢占
    ├─ PENDING -> RUNNING 更新成功 → 获得回调执行权
@@ -262,7 +262,7 @@ func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucke
    - 上报 Prometheus 指标
 ```
 
-定时器定义在创建后不提供修改操作；如需改变 Cron 或回调参数，需要删除旧定义并新建。由于可变化的状态不从本地缓存读取，停用和删除会在各执行节点后续的状态检查中生效，不受缓存 TTL 延迟影响；已经开始执行的回调不在此保证范围内。
+定时器定义在创建后不提供修改操作；如需改变 Cron 或回调参数，需要删除旧定义并新建。Executor 的本地定义缓存包含状态，停用和删除后，持有旧 `ACTIVE` 缓存的执行节点可能在一个 `step2_duration` 周期内继续回调；缓存过期后会从 MySQL 加载新状态并跳过任务。已经开始执行的回调不在此保证范围内。
 
 ## 模块间通信
 

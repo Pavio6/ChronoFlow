@@ -91,9 +91,9 @@ graph TD
     M --> N["Bloom Filter 快速查询"]
     N --> N2{"命中且 MySQL<br/>确认已处理?"}
     N2 -->|是| S
-    N2 -->|否| N3{"MySQL 实时状态<br/>仍为 ACTIVE?"}
+    N2 -->|否| N3{"读取本地定义缓存<br/>状态为 ACTIVE?"}
     N3 -->|否| S
-    N3 -->|是| O["读取不可变配置缓存<br/>MySQL 原子抢占 PENDING → RUNNING"]
+    N3 -->|是| O["MySQL 原子抢占<br/>PENDING → RUNNING"]
     O --> P{"抢占成功?"}
     P -->|否| S["跳过（已被领取或完成）"]
     P -->|是| T["执行 HTTP 回调"]
@@ -329,7 +329,7 @@ PORT=8081 go run cmd/server/main.go
 | 配置项 | 默认值 | 说明 |
 |--------|--------|------|
 | `scheduler.migrate_step_minutes` | 60 | Migrator 执行间隔（分钟） |
-| `scheduler.step2_duration` | 300 | 二级迁移时间步（秒），内存缓存刷新间隔 |
+| `scheduler.step2_duration` | 120 | 二级迁移时间步（秒），本地定义及状态缓存有效期（2 分钟） |
 | `scheduler.bucket_num` | 3 | 分桶数量 |
 | `scheduler.scan_interval` | 1 | Scheduler 轮询间隔（秒） |
 | `scheduler.lock_expiration` | 70 | 分片锁初始 TTL（秒） |
@@ -353,7 +353,7 @@ INACTIVE ──激活──→ ACTIVE ──停用──→ INACTIVE
     └────删除────────→ DELETED（终态）
 ```
 
-定时器定义创建后不可修改；需要变更 Cron 或回调配置时，应删除旧定时器并新建。停用或删除不会清理 Redis ZSet 中已经生成的任务点，Executor 每次唤起都从 MySQL 校验实时状态，非 `ACTIVE` 任务不会执行回调；内存缓存仅复用不可变执行配置。
+定时器定义创建后不可修改；需要变更 Cron 或回调配置时，应删除旧定时器并新建。停用或删除不会清理 Redis ZSet 中已经生成的任务点。与 xTimer 一致，Executor 使用包含状态的节点本地定义缓存判断是否执行，因此停用或删除可能在一个 `step2_duration` 周期内仍有回调；缓存失效后非 `ACTIVE` 任务会被跳过。
 
 ## 文档
 

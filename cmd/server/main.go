@@ -93,6 +93,7 @@ func main() {
 	executor := service.NewExecutor(
 		defRepo, recRepo, bloomFilter, timerCache,
 		reporter, &cfg.Executor,
+		time.Duration(cfg.Scheduler.Step2Duration)*time.Second,
 	)
 
 	// 触发器（被 Scheduler 调用，DB 回退需要 recRepo）

@@ -236,9 +236,9 @@ Executor.Execute(trigger)
     ↓
 Bloom Filter 快速查询；命中后 MySQL 确认已处理则跳过
     ↓
-MySQL 实时校验定时器状态；非 ACTIVE 则跳过
+查询包含状态的定时器定义（内存缓存 → MySQL）
     ↓
-查询不可变执行配置（内存缓存 → MySQL）
+按定义状态判断；非 ACTIVE 则跳过
     ↓
 原子抢占状态: PENDING → RUNNING
     ↓ 更新行数为 0：跳过
@@ -251,7 +251,7 @@ MySQL 实时校验定时器状态；非 ACTIVE 则跳过
 执行成功 → Bloom Filter 打点（仅成功时写入）
 ```
 
-停用或删除定时器不会删除 Redis ZSet 中已经打下的点。点仍可被 Trigger 读取并提交，但 Executor 在读取当前数据库状态后会跳过，不发起回调；本地配置缓存不参与状态判定。
+停用或删除定时器不会删除 Redis ZSet 中已经打下的点。点仍可被 Trigger 读取并提交；Executor 按本地定义缓存中的状态判断是否执行，因此持有旧 `ACTIVE` 缓存的节点可能在一个 `step2_duration` 周期内继续发起回调，缓存过期回源 MySQL 后才跳过。
 
 ### Bloom 快速过滤、存储唯一性与原子抢占
 

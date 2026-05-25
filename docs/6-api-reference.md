@@ -113,7 +113,7 @@ POST /api/v1/timers/:id/activate
 POST /api/v1/timers/:id/deactivate
 ```
 
-状态转换：ACTIVE → INACTIVE。停用后不再创建新的执行记录，也不会删除已经写入 Redis ZSet 的点；这些点被 Trigger 唤起后，Executor 会从 MySQL 校验当前状态并直接跳过非 `ACTIVE` 定时器。
+状态转换：ACTIVE → INACTIVE。停用后不再创建新的执行记录，也不会删除已经写入 Redis ZSet 的点；Executor 使用节点本地定义缓存中的状态执行判断，因此持有旧 `ACTIVE` 缓存的节点可能在一个 `step2_duration` 周期内继续回调，缓存过期后会跳过非 `ACTIVE` 定时器。
 
 ## 执行记录
 
