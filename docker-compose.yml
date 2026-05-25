@@ -15,15 +15,17 @@ services:
     environment:
       - GIN_MODE=release
     volumes:
-      - ./config:/app/config
+      - ./config/config.docker.yaml:/app/config/config.yaml:ro
       - ./logs:/app/logs
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     networks:
       - chronoflow-network
     restart: unless-stopped
 
   # ChronoFlow 前端服务
   frontend:
-    image: node:18-alpine
+    image: node:22-alpine
     container_name: chronoflow-frontend
     ports:
       - "3000:3000"
@@ -38,6 +40,35 @@ services:
     restart: unless-stopped
     profiles:
       - frontend
+
+  prometheus:
+    image: prom/prometheus
+    container_name: chronoflow-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - chronoflow-network
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana
+    container_name: chronoflow-grafana
+    ports:
+      - "3001:3000"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    networks:
+      - chronoflow-network
+    restart: unless-stopped
 
   # MySQL 数据库
   mysql:
@@ -82,6 +113,8 @@ services:
 volumes:
   mysql-data:
   redis-data:
+  prometheus-data:
+  grafana-data:
 
 networks:
   chronoflow-network:

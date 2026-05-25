@@ -20,7 +20,7 @@ POST /api/v1/timers
   "app": "order-service",
   "name": "每分钟检查订单",
   "cron_expr": "0 * * * * *",
-  "callback_url": "http://localhost:9090/callback/success",
+  "callback_url": "http://localhost:9091/callback/success",
   "callback_method": "POST",
   "callback_body": "{\"action\": \"check_orders\"}",
   "callback_headers": {"Authorization": "Bearer token123"}
@@ -38,7 +38,7 @@ POST /api/v1/timers
     "app": "order-service",
     "name": "每分钟检查订单",
     "cron_expr": "0 * * * * *",
-    "callback_url": "http://localhost:9090/callback/success",
+    "callback_url": "http://localhost:9091/callback/success",
     "callback_method": "POST",
     "callback_body": "{\"action\": \"check_orders\"}",
     "callback_headers": "{\"Authorization\":\"Bearer token123\"}",
@@ -74,10 +74,17 @@ GET /api/v1/timers?page=1&page_size=10&app=order-service&status=ACTIVE&keyword=�
     "total": 50,
     "page": 1,
     "page_size": 10,
-    "items": [...]
+    "items": [...],
+    "stats": {
+      "total": 50,
+      "active": 32,
+      "inactive": 18
+    }
   }
 }
 ```
+
+`stats` 按当前列表筛选条件聚合，不受分页影响。
 
 ### 获取定时器详情
 
@@ -130,6 +137,8 @@ GET /api/v1/records?page=1&page_size=10&timer_id=1&status=SUCCESS
 | timer_id | int | 定时器 ID 过滤 |
 | status | string | 状态过滤 |
 
+响应 `data.stats` 按当前列表筛选条件返回 `total`、`pending`、`running`、`success`、`failed` 聚合值，不受分页影响。
+
 ### 获取指定定时器的执行记录
 
 ```
@@ -166,6 +175,16 @@ GET /metrics
 ```
 
 返回 Prometheus 格式的指标数据。
+
+### 监控历史趋势
+
+```
+GET /api/v1/monitoring/history?range_minutes=60
+```
+
+后端代理查询 Prometheus 并返回管理端图表使用的历史序列。`range_minutes` 支持
+`15`、`60`、`360`、`1440`，其他值按 `60` 分钟处理。返回的序列包括服务可用性、
+成功率、P95 延迟与异常任务（超期待执行和卡住执行的合计数量）。
 
 ## 错误响应
 

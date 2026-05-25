@@ -12,7 +12,7 @@
 | **执行幂等** | Bloom 快速过滤 + 唯一业务键 + MySQL 原子状态抢占 |
 | **分布式锁** | Scheduler 对每个分片 SETNX 抢锁，多实例互斥 |
 | **协程池** | ants 协程池控制并发数，防止资源耗尽 |
-| **Prometheus** | 内置指标采集（执行次数/耗时/成功率/队列深度） |
+| **可观测性 MVP** | 低基数业务指标 + Prometheus 历史存储 + Grafana dashboard/基础告警 |
 
 ## 技术栈
 
@@ -151,16 +151,18 @@ ChronoFlow/
 ### 环境要求
 
 - Go 1.26.2+
-- Node.js 18+（前端开发）
+- Node.js 20.19+ 或 22.12+（前端开发，Vite 8 要求）
 - MySQL 8.0+
 - Redis 7.0+
 
-### 1. 启动基础设施
+### 1. 启动基础依赖与监控栈
 
 ```bash
-# 启动 MySQL + Redis
-make docker-up
+make dev-start
+# 等价于：docker compose up -d mysql redis prometheus grafana
 ```
+
+`dev-start` 不启动后端；Prometheus 从容器内通过 `host.docker.internal:8080` 抓取宿主机上运行的 ChronoFlow。
 
 ### 2. 初始化数据库
 
@@ -187,15 +189,19 @@ redis:
 ### 4. 启动后端
 
 ```bash
-make dev-backend
+make dev-app
 # 或
 go run cmd/server/main.go
 ```
 
+后端使用 `config/config.yaml` 连接由 `dev-start` 启动的 MySQL 与 Redis。需要将后端也放入 Compose 时，可运行 `docker compose up -d chronoflow`，该容器使用 `config/config.docker.yaml`。
+
 服务启动后：
 - API: http://localhost:8080/api/v1/timers
-- Prometheus: http://localhost:8080/metrics
+- Exporter: http://localhost:8080/metrics
 - 健康检查: http://localhost:8080/health
+- Prometheus 查询界面（Compose）: http://localhost:9090
+- Grafana 告警管理（Compose）: http://localhost:3001
 
 ### 5. 启动前端
 
@@ -217,7 +223,7 @@ make test-callback
 go run tests/callback-server/main.go
 ```
 
-测试回调服务监听在 `http://localhost:9090`，提供以下接口：
+测试回调服务监听在 `http://localhost:9091`，避免与 Prometheus 的 `9090` 端口冲突，提供以下接口：
 
 | 接口 | 说明 |
 |------|------|
@@ -225,6 +231,8 @@ go run tests/callback-server/main.go
 | `POST /callback/slow` | 延迟 10 秒后返回 |
 | `POST /callback/error` | 返回 500 错误 |
 | `GET /stats` | 查看调用统计 |
+
+以下 callback URL 适用于本地运行的后端；后端由 Compose 启动时，将 URL 中的 `localhost` 改为 `host.docker.internal`。
 
 ### 步骤二：创建定时器
 
@@ -236,7 +244,7 @@ curl -X POST http://localhost:8080/api/v1/timers \
     "app": "test",
     "name": "测试定时器-30秒",
     "cron_expr": "*/30 * * * * *",
-    "callback_url": "http://localhost:9090/callback/success",
+    "callback_url": "http://localhost:9091/callback/success",
     "callback_method": "POST",
     "callback_body": "{\"msg\": \"hello\"}"
   }'
@@ -280,7 +288,7 @@ curl http://localhost:8080/api/v1/records
 curl http://localhost:8080/api/v1/timers/1/records
 
 # 查看测试回调服务统计
-curl http://localhost:9090/stats
+curl http://localhost:9091/stats
 ```
 
 ### 步骤五：测试慢回调
@@ -293,23 +301,27 @@ curl -X POST http://localhost:8080/api/v1/timers \
     "app": "test",
     "name": "测试超时",
     "cron_expr": "*/30 * * * * *",
-    "callback_url": "http://localhost:9090/callback/slow",
+    "callback_url": "http://localhost:9091/callback/slow",
     "callback_method": "POST"
   }'
 ```
 
-### 步骤六：查看 Prometheus 指标
+### 步骤六：查看指标与历史趋势
 
 ```bash
-# 访问 Prometheus 指标端点
+# 应用原始指标
 curl http://localhost:8080/metrics
 
 # 关键指标：
-# chronoflow_timer_exec_total - 执行总次数
-# chronoflow_timer_exec_duration_ms - 执行耗时分布
-# chronoflow_timer_exec_success_total - 成功次数
-# chronoflow_timer_exec_failed_total - 失败次数
+# chronoflow_callback_requests_total{result="success|failed"}
+# chronoflow_callback_duration_seconds{result="success|failed"}
+# chronoflow_records{status="PENDING|RUNNING|SUCCESS|FAILED"}
+# chronoflow_pending_overdue_records
+# chronoflow_running_stale_records
+# chronoflow_redis_queue_items
 ```
+
+打开管理端的“监控面板”查看 Prometheus 持久化的历史曲线。Grafana 仍负责预置告警规则：服务不可采集、存在超期 `PENDING` 或存在 stale `RUNNING` 持续一分钟时进入告警状态。
 
 ### 步骤七：多实例部署测试
 
@@ -334,6 +346,10 @@ PORT=8081 go run cmd/server/main.go
 | `scheduler.lock_expiration` | 70 | 分片锁初始 TTL（秒） |
 | `scheduler.success_expiration` | 130 | 分片扫描成功后的锁保留 TTL（秒） |
 | `executor.worker_pool_size` | 100 | 协程池大小 |
+| `monitoring.collect_interval_seconds` | 10 | 状态 Gauge 指标采集周期（秒） |
+| `monitoring.pending_overdue_seconds` | 120 | `PENDING` 记录超期阈值（秒） |
+| `monitoring.running_stale_seconds` | 60 | `RUNNING` 记录卡住阈值（秒） |
+| `monitoring.prometheus_url` | `http://localhost:9090` | 后端查询历史指标使用的 Prometheus 地址 |
 
 ## Redis Key 结构
 
