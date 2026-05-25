@@ -10,7 +10,7 @@ chronoflow:scheduler_lock:{YYYY-MM-DD-HH:mm}:{bucket}
 
 ### 获取与所有权
 
-与 xtimer 一致，Scheduler 先将分片处理提交到 worker pool；处理该分片的 worker 创建锁对象，并使用 `GetProcessAndGoroutineIDStr()` 生成 token：
+Scheduler 先将分片处理提交到 worker pool；处理该分片的 worker 创建锁对象，并使用 `GetProcessAndGoroutineIDStr()` 生成 token：
 
 ```go
 lock := queue.NewSchedulerLock(timeRange, bucket) // token = processID_goroutineID
@@ -94,7 +94,7 @@ WHERE timer_id = ? AND trigger_time = ? AND status = 'PENDING';
 
 ### Bloom Filter
 
-Bloom Filter 参考 xtimer 同时用于读写路径：
+Bloom Filter 同时用于读写路径：
 
 1. Executor 启动时先查询 Bloom Filter。
 2. 命中时查询 MySQL 状态确认；已离开 `PENDING` 的任务可提前跳过。

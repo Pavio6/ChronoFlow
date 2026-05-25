@@ -61,7 +61,7 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 5. worker 以 `processID_goroutineID` token 执行 `SET NX` 抢锁，TTL = `lock_expiration`（默认 70 秒）
 6. 抢到锁 → 在同一 worker 中运行 Trigger
 
-**锁策略（参考 xTimer）**：
+**锁策略**：
 
 - 初始锁 TTL = `lock_expiration`（默认 70 秒），确保覆盖整个时间片（60 秒）且有余量
 - Trigger 成功扫描完整分片后将锁 TTL 设置为 `success_expiration`（默认 130 秒），覆盖上一分钟回扫窗口
@@ -111,7 +111,7 @@ Scheduler 每次轮询都会为有任务的分片提交 worker 尝试抢锁，�
 
 **时间片结束**：每个 Trigger 负责处理一分钟内某个桶的任务，`10:30` 时间片表示 `[10:30:00, 10:31:00)`。如果 Scheduler 在下一分钟补扫该分片，Trigger 会立即处理尚未完成的整个历史区间。
 
-**成功保留 TTL（参考 xTimer）**：初始锁 TTL 为 `lock_expiration`（默认 70 秒），覆盖 60 秒分片处理。分片扫描成功完成后，Trigger 将锁的剩余 TTL 重置为 `success_expiration`（默认 130 秒），避免当前/上一分钟扫描重入；这不表示 HTTP 回调全程持锁。
+**成功保留 TTL**：初始锁 TTL 为 `lock_expiration`（默认 70 秒），覆盖 60 秒分片处理。分片扫描成功完成后，Trigger 将锁的剩余 TTL 重置为 `success_expiration`（默认 130 秒），避免当前/上一分钟扫描重入；这不表示 HTTP 回调全程持锁。
 
 **防重复机制**：任务保留在 ZSet 中；非重叠读取窗口避免同一次 Trigger 重复派发。分布式锁降低多实例重复派发，数据库原子 `PENDING -> RUNNING` 抢占则保证重复派发不会重复执行回调。
 

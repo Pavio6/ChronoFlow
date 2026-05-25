@@ -33,9 +33,9 @@ scheduler:
   bucket_metadata_ttl: 600
   # Scheduler 轮询间隔（秒）
   scan_interval: 1
-  # 分布式锁初始 TTL（秒），必须大于时间片时长（60 秒），参考 xTimer tryLockSeconds
+  # 分布式锁初始 TTL（秒），必须大于时间片时长（60 秒）
   lock_expiration: 70
-  # 分片扫描成功后的锁保留 TTL（秒），覆盖上一分钟回扫窗口，参考 xTimer successExpireSeconds
+  # 分片扫描成功后的锁保留 TTL（秒），覆盖上一分钟回扫窗口
   success_expiration: 130
 
 executor:

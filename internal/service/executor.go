@@ -74,7 +74,7 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 	bloomKey := fmt.Sprintf("%s%s", redis.BloomPrefix, triggerTime.Format("2006-01-02"))
 	bloomVal := fmt.Sprintf("%d:%d", timerID, triggerTime.UnixMilli())
 
-	// 参考 xTimer：Bloom Filter 命中时再由 MySQL 确认，避免误判造成漏执行。
+	// Bloom Filter 命中时再由 MySQL 确认，避免误判造成漏执行。
 	mightExist, err := e.bloom.Exist(ctx, bloomKey, bloomVal)
 	if err != nil {
 		logger.Warn("Executor Bloom Filter 查询失败，继续使用数据库抢占",

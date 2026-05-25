@@ -1,0 +1,42 @@
+server:
+  port: 8080
+  mode: release
+
+database:
+  driver: mysql
+  dsn: "root:123456@tcp(mysql:3306)/chronoflow?charset=utf8mb4&parseTime=True&loc=Local"
+  max_open_conns: 100
+  max_idle_conns: 10
+  conn_max_lifetime: 60
+
+redis:
+  addr: "redis:6379"
+  password: ""
+  db: 1
+  pool_size: 100
+
+scheduler:
+  migrate_step_minutes: 60
+  step2_duration: 120
+  base_bucket_num: 1
+  bucket_num: 3
+  tasks_per_bucket: 100
+  bucket_metadata_ttl: 600
+  scan_interval: 1
+  lock_expiration: 70
+  success_expiration: 130
+
+executor:
+  worker_pool_size: 100
+
+monitoring:
+  collect_interval_seconds: 10
+  pending_overdue_seconds: 120
+  running_stale_seconds: 60
+  prometheus_url: "http://prometheus:9090"
+
+log:
+  level: info
+  format: json
+  output: stdout
+  file_path: ""

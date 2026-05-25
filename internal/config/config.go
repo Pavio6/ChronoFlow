@@ -171,7 +171,7 @@ func setDefaults() {
 	viper.SetDefault("scheduler.tasks_per_bucket", 100)    // 每 100 个投递任务扩一个桶
 	viper.SetDefault("scheduler.bucket_metadata_ttl", 600) // 时间片结束后保留 10 分钟
 	viper.SetDefault("scheduler.scan_interval", 1)         // 1 秒
-	viper.SetDefault("scheduler.lock_expiration", 70)      // 70 秒，参考 xTimer tryLockSeconds
+	viper.SetDefault("scheduler.lock_expiration", 70)      // 70 秒
 	viper.SetDefault("scheduler.success_expiration", 130)  // 130 秒，分片成功扫描后的保留 TTL
 
 	// 执行器默认配置

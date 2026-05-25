@@ -129,7 +129,7 @@ for _, def := range activeDefinitions {
 // Scheduler：提交 worker；worker 内抢锁并运行 Trigger（同时处理当前分钟和上一分钟）
 currentBucketNum, _ := queue.GetBucketNum(ctx, currentTimeRange, defaultBucketNum)
 prevBucketNum, _ := queue.GetBucketNum(ctx, prevTimeRange, defaultBucketNum)
-lockExpiration := time.Duration(cfg.LockExpiration) * time.Second // 默认 70s，参考 xTimer tryLockSeconds
+lockExpiration := time.Duration(cfg.LockExpiration) * time.Second // 默认 70s
 
 for bucket := 0; bucket < currentBucketNum; bucket++ {
     pool.Submit(func() {
@@ -149,7 +149,7 @@ for bucket := 0; bucket < prevBucketNum; bucket++ {
 }
 
 // Trigger：非重叠窗口轮询 + DB 部分投递补偿 + 提交 Executor + 成功保留锁
-successExpiration := time.Duration(cfg.SuccessExpiration) * time.Second // 默认 130s，参考 xTimer successExpireSeconds
+successExpiration := time.Duration(cfg.SuccessExpiration) * time.Second // 默认 130s
 cursor := sliceStart
 for cursor.Before(sliceEnd) {
     dueEnd := min(nextWholeSecond(time.Now()), sliceEnd)
@@ -186,4 +186,4 @@ UPDATE ... WHERE status = PENDING → RowsAffected = 1 → 获得执行权
 | 条件状态更新 | 竞争执行权 | 必须 |
 | Bloom Filter | 快速过滤可能已完成的任务，命中后再查 MySQL | 优化，不单独授予/拒绝执行许可 |
 
-Bloom Filter 参考 xTimer 置于 Executor 前置路径：命中后由 MySQL 状态确认是否跳过；miss、误判或查询故障仍进入数据库条件更新。它可以降低重复任务的后续处理开销，但不能替代原子抢占。
+Bloom Filter 置于 Executor 前置路径：命中后由 MySQL 状态确认是否跳过；miss、误判或查询故障仍进入数据库条件更新。它可以降低重复任务的后续处理开销，但不能替代原子抢占。

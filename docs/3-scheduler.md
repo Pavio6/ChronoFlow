@@ -115,7 +115,7 @@ func (s *Scheduler) schedule(ctx context.Context) {
     currentBucketNum, _ := s.queue.GetBucketNum(ctx, currentTimeRange, s.cfg.BaseBucketNum)
     prevBucketNum, _ := s.queue.GetBucketNum(ctx, prevTimeRange, s.cfg.BaseBucketNum)
     
-    // 锁初始 TTL，参考 xTimer tryLockSeconds（必须大于时间片时长 60 秒）
+    // 锁初始 TTL（必须大于时间片时长 60 秒）
     lockExpiration := time.Duration(s.cfg.LockExpiration) * time.Second
     
     // 处理当前分钟
@@ -141,8 +141,8 @@ func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket in
 
 ### 锁策略
 
-- 锁初始 TTL = `lock_expiration`（默认 70 秒，参考 xTimer `tryLockSeconds`，必须大于时间片时长 60 秒）
-- Trigger 成功扫描完整分片后将锁 TTL 设置为 `success_expiration`（默认 130 秒，参考 xTimer `successExpireSeconds`）
+- 锁初始 TTL = `lock_expiration`（默认 70 秒，必须大于时间片时长 60 秒）
+- Trigger 成功扫描完整分片后将锁 TTL 设置为 `success_expiration`（默认 130 秒）
 - 锁 token = `GetProcessAndGoroutineIDStr()`，由执行该分片的 worker goroutine 生成
 - `Extend` / `Release` 通过 Lua 比较 token，仅当前锁持有者能够操作锁
 - 锁粒度：每个 `{time_range}:{bucket}` 一把锁
@@ -159,7 +159,7 @@ func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket in
 
 - 在时间片内持续轮询 Redis ZSet
 - 用不重叠扫描窗口读取到期任务，避免一次 Trigger 重复派发同一 member
-- 扫描成功后保留锁 TTL（参考 xTimer successExpireSeconds），覆盖上一分钟回扫
+- 扫描成功后保留锁 TTL，覆盖上一分钟回扫
 - 每个窗口合并已有 MySQL PENDING 记录（Redis 部分投递失败兜底）
 - 提交 Executor 到协程池
 

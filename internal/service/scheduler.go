@@ -107,7 +107,7 @@ func (s *Scheduler) schedule(ctx context.Context) {
 		prevBucketNum = s.cfg.BaseBucketNum
 	}
 
-	// 锁的初始 TTL，参考 xTimer tryLockSeconds（必须大于时间片时长 60 秒）
+	// 锁的初始 TTL（必须大于时间片时长 60 秒）
 	lockExpiration := time.Duration(s.cfg.LockExpiration) * time.Second
 
 	// 处理当前分钟
