@@ -8,14 +8,12 @@ import (
 )
 
 // TimerDefinitionRepository 定时器定义仓库接口
-// 提供对定时器定义表的 CRUD 操作
+// 提供对定时器定义表的创建、读取和状态管理操作
 type TimerDefinitionRepository interface {
 	// Create 创建定时器定义
 	Create(def *model.TimerDefinition) error
 	// GetByID 根据 ID 获取定时器定义
 	GetByID(id int64) (*model.TimerDefinition, error)
-	// Update 更新定时器定义
-	Update(def *model.TimerDefinition) error
 	// Delete 逻辑删除定时器定义（将状态设置为 DELETED）
 	Delete(id int64) error
 	// List 分页查询定时器定义列表（支持应用名、状态、关键字过滤）
@@ -24,6 +22,8 @@ type TimerDefinitionRepository interface {
 	GetActiveDefinitions() ([]*model.TimerDefinition, error)
 	// UpdateStatus 更新定时器定义状态
 	UpdateStatus(id int64, status model.TimerStatus) error
+	// IsActive 查询定时器当前是否处于可执行状态，不使用本地缓存
+	IsActive(id int64) (bool, error)
 	// CountByStatus 按定时器状态统计数量
 	CountByStatus() (map[model.TimerStatus]int64, error)
 }
@@ -58,14 +58,6 @@ func (r *timerDefinitionRepo) GetByID(id int64) (*model.TimerDefinition, error) 
 		return nil, fmt.Errorf("查询定时器定义失败: %w", err)
 	}
 	return &def, nil
-}
-
-// Update 更新定时器定义
-func (r *timerDefinitionRepo) Update(def *model.TimerDefinition) error {
-	if err := r.db.Save(def).Error; err != nil {
-		return fmt.Errorf("更新定时器定义失败: %w", err)
-	}
-	return nil
 }
 
 // Delete 逻辑删除定时器定义（将状态设置为 DELETED）
@@ -148,6 +140,17 @@ func (r *timerDefinitionRepo) UpdateStatus(id int64, status model.TimerStatus) e
 		return fmt.Errorf("定时器定义不存在，id=%d", id)
 	}
 	return nil
+}
+
+// IsActive 查询数据库中的实时状态，保证停用或删除后不执行已打点任务。
+func (r *timerDefinitionRepo) IsActive(id int64) (bool, error) {
+	var count int64
+	if err := r.db.Model(&model.TimerDefinition{}).
+		Where("id = ? AND status = ?", id, model.TimerStatusActive).
+		Count(&count).Error; err != nil {
+		return false, fmt.Errorf("查询定时器激活状态失败: %w", err)
+	}
+	return count > 0, nil
 }
 
 // CountByStatus 按定时器状态统计数量

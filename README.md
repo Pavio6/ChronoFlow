@@ -9,7 +9,7 @@
 | **时间分片** | 按分钟级时间范围切分 Redis ZSet，减少单次查询量 |
 | **分桶并发** | 按 `timer_id % bucket_num` 分桶，每桶独立 goroutine 并发处理 |
 | **三级存储** | MySQL → Redis ZSet → 节点内存缓存，逐级加速 |
-| **两层幂等** | Bloom Filter → MySQL 查重，防止重复执行 |
+| **执行幂等** | Bloom 快速过滤 + 唯一业务键 + MySQL 原子状态抢占 |
 | **分布式锁** | Scheduler 对每个分片 SETNX 抢锁，多实例互斥 |
 | **协程池** | ants 协程池控制并发数，防止资源耗尽 |
 | **Prometheus** | 内置指标采集（执行次数/耗时/成功率/队列深度） |
@@ -68,6 +68,7 @@ graph TB
 ```mermaid
 graph TD
     A["定时器创建"] --> B["定义存 MySQL<br/>(status=INACTIVE)"]
+    B --> B2["定义创建后不可修改<br/>变更需删除并新建"]
     B --> C["定时器激活"]
     C --> D["Migrator 批量预创建定时任务"]
     D --> E["定时任务存 MySQL + Redis ZSet<br/>(按分片分桶)"]
@@ -75,29 +76,32 @@ graph TD
     F["每 1s Scheduler 轮询"] --> G["计算当前 time_range"]
     G --> G2["同时处理当前分钟和上一分钟"]
     G2 --> G3["分别获取各分钟的动态分桶数"]
-    G3 --> H["遍历每个桶，抢分布式锁<br/>TTL = lock_expiration (70s)"]
-    H --> I{"抢到锁?"}
-    I -->|是| J["从协程池提交 Trigger"]
+    G3 --> H["遍历每个桶，提交分片处理 worker"]
+    H --> I["worker 用 processID_goroutineID token<br/>抢锁 TTL = 70s"]
+    I --> I2{"抢到锁?"}
+    I2 -->|是| J["运行 Trigger"]
     
     J --> K["在时间片内轮询 Redis ZSet<br/>{time_range}:{bucket}"]
-    K --> K2["每轮续期锁 TTL (success_expiration)"]
-    K2 --> L["ZRANGEBYSCORE 取到期任务"]
+    K --> L["按不重叠时间窗口 ZRANGEBYSCORE<br/>取到期任务"]
     L --> L2{"Redis 有结果?"}
     L2 -->|否| L3["回退查询 MySQL（冷启动兜底）"]
     L3 --> M
     L2 -->|是| M["从协程池提交 Executor"]
     
-    M --> O["bloom filter 查重"]
-    O --> P{"bloom 命中?"}
-    P -->|是| Q["MySQL 查记录状态"]
-    Q --> R{"status != PENDING?"}
-    R -->|是| S["跳过（已执行）"]
-    P -->|否| T["执行 HTTP 回调"]
-    R -->|否| T
+    M --> N["Bloom Filter 快速查询"]
+    N --> N2{"命中且 MySQL<br/>确认已处理?"}
+    N2 -->|是| S
+    N2 -->|否| N3{"MySQL 实时状态<br/>仍为 ACTIVE?"}
+    N3 -->|否| S
+    N3 -->|是| O["读取不可变配置缓存<br/>MySQL 原子抢占 PENDING → RUNNING"]
+    O --> P{"抢占成功?"}
+    P -->|否| S["跳过（已被领取或完成）"]
+    P -->|是| T["执行 HTTP 回调"]
     T --> U{"执行成功?"}
     U -->|是| W["bloom filter 打点"]
     W --> V["更新 MySQL 记录状态"]
     U -->|否| V
+    K --> K2["分片扫描成功后<br/>Lua 校验 token 并保留锁 TTL (130s)"]
 ```
 
 ## 项目结构
@@ -328,6 +332,8 @@ PORT=8081 go run cmd/server/main.go
 | `scheduler.step2_duration` | 300 | 二级迁移时间步（秒），内存缓存刷新间隔 |
 | `scheduler.bucket_num` | 3 | 分桶数量 |
 | `scheduler.scan_interval` | 1 | Scheduler 轮询间隔（秒） |
+| `scheduler.lock_expiration` | 70 | 分片锁初始 TTL（秒） |
+| `scheduler.success_expiration` | 130 | 分片扫描成功后的锁保留 TTL（秒） |
 | `executor.timeout` | 30 | HTTP 回调超时（秒） |
 | `executor.worker_pool_size` | 100 | 协程池大小 |
 
@@ -336,7 +342,7 @@ PORT=8081 go run cmd/server/main.go
 | 用途 | Key 格式 | 类型 |
 |------|----------|------|
 | 任务队列 | `chronoflow:timer:{YYYY-MM-DD-HH:mm}:{bucket}` | ZSet |
-| Scheduler 锁 | `chronoflow:scheduler_lock:{time_range}:{bucket}` | String (SETNX) |
+| Scheduler 锁 | `chronoflow:scheduler_lock:{time_range}:{bucket}` | String (owner token, SET NX TTL) |
 | 布隆过滤器 | `chronoflow:bloom:{date}` | String (bitmap) |
 
 ## 定时器状态流转
@@ -346,6 +352,8 @@ INACTIVE ──激活──→ ACTIVE ──停用──→ INACTIVE
     │                 │
     └────删除────────→ DELETED（终态）
 ```
+
+定时器定义创建后不可修改；需要变更 Cron 或回调配置时，应删除旧定时器并新建。停用或删除不会清理 Redis ZSet 中已经生成的任务点，Executor 每次唤起都从 MySQL 校验实时状态，非 `ACTIVE` 任务不会执行回调；内存缓存仅复用不可变执行配置。
 
 ## 文档
 

@@ -126,30 +126,38 @@ for _, def := range activeDefinitions {
 ### Scheduler → Trigger → Executor 协程池通信
 
 ```go
-// Scheduler：抢锁 + 提交 Trigger（同时处理当前分钟和上一分钟，分别获取动态分桶数）
+// Scheduler：提交 worker；worker 内抢锁并运行 Trigger（同时处理当前分钟和上一分钟）
 currentBucketNum, _ := queue.GetBucketNum(ctx, currentTimeRange, defaultBucketNum)
 prevBucketNum, _ := queue.GetBucketNum(ctx, prevTimeRange, defaultBucketNum)
 lockExpiration := time.Duration(cfg.LockExpiration) * time.Second // 默认 70s，参考 xTimer tryLockSeconds
 
 for bucket := 0; bucket < currentBucketNum; bucket++ {
-    if acquired, _ := queue.AcquireSchedulerLock(ctx, currentTimeRange, bucket, lockExpiration); acquired {
-        pool.Submit(func() { trigger.Run(ctx, currentTimeRange, bucket, currentBucketNum) })
-    }
+    pool.Submit(func() {
+        lock := queue.NewSchedulerLock(currentTimeRange, bucket) // token = processID_goroutineID
+        if acquired, _ := lock.Lock(ctx, lockExpiration); acquired {
+            trigger.Run(ctx, currentTimeRange, bucket, currentBucketNum, lock)
+        }
+    })
 }
 for bucket := 0; bucket < prevBucketNum; bucket++ {
-    if acquired, _ := queue.AcquireSchedulerLock(ctx, prevTimeRange, bucket, lockExpiration); acquired {
-        pool.Submit(func() { trigger.Run(ctx, prevTimeRange, bucket, prevBucketNum) })
-    }
+    pool.Submit(func() {
+        lock := queue.NewSchedulerLock(prevTimeRange, bucket)
+        if acquired, _ := lock.Lock(ctx, lockExpiration); acquired {
+            trigger.Run(ctx, prevTimeRange, bucket, prevBucketNum, lock)
+        }
+    })
 }
 
-// Trigger：轮询 + 每轮续期锁 + DB 回退 + 提交 Executor
+// Trigger：非重叠窗口轮询 + DB 回退 + 提交 Executor + 成功保留锁
 successExpiration := time.Duration(cfg.SuccessExpiration) * time.Second // 默认 130s，参考 xTimer successExpireSeconds
-for !timeSliceExpired {
-    queue.ExtendSchedulerLock(ctx, timeRange, bucket, successExpiration) // 每轮续期，防止空闲时锁过期
-    triggers, _ := queue.GetDueTasks(ctx, timeRange, bucket, batchSize)
+cursor := sliceStart
+for cursor.Before(sliceEnd) {
+    dueEnd := min(nextWholeSecond(time.Now()), sliceEnd)
+    if !cursor.Before(dueEnd) { continue }
+    triggers, _ := queue.GetTasksByTime(ctx, timeRange, bucket, cursor, dueEnd)
     // Redis 无结果时回退查询 MySQL（冷启动兜底）
     if len(triggers) == 0 {
-        triggers, _ = recRepo.GetPendingByTimeRange(start, end)
+        triggers, _ = recRepo.GetPendingByTimeRange(cursor, dueEnd)
         // 按 bucket 过滤: timer_id % bucketNum == bucket
     }
     for _, t := range triggers {
@@ -157,23 +165,25 @@ for !timeSliceExpired {
             executor.Execute(ctx, t)
         })
     }
+    cursor = dueEnd
 }
+lock.Extend(ctx, successExpiration) // Lua 校验 token 后设置完整扫描成功后的保留 TTL
 ```
 
-### 两层幂等去重
+### 数据库原子执行抢占
 
 ```
-Bloom Filter → miss → 执行
-Bloom Filter → hit → MySQL 查重（查记录状态）
-                   → status != PENDING → 跳过（已执行）
-                   → status == PENDING → 执行
+唯一索引 (timer_id, trigger_time) → 防止重复创建执行记录
+UPDATE ... WHERE status = PENDING → RowsAffected = 1 → 获得执行权
+                                  → RowsAffected = 0 → 跳过重复派发
 ```
 
-**为什么需要两层？**
+**Bloom Filter 的位置**
 
-| 层级 | 作用 | 误判 | 延迟 |
-|------|------|------|------|
-| Bloom Filter | 快速过滤大部分已执行任务 | 有（false positive） | 极低 |
-| MySQL 查询 | bloom 误判时最终确认 | 无 | 中 |
+| 层级 | 作用 | 正确性职责 |
+|------|------|------------|
+| 唯一索引 | 阻止重复建任务记录 | 必须 |
+| 条件状态更新 | 竞争执行权 | 必须 |
+| Bloom Filter | 快速过滤可能已完成的任务，命中后再查 MySQL | 优化，不单独授予/拒绝执行许可 |
 
-Bloom Filter 的误判率约 1%，即 1% 的已执行任务会穿透到 MySQL 检查，无需额外的 Redis 幂等键层。
+Bloom Filter 参考 xTimer 置于 Executor 前置路径：命中后由 MySQL 状态确认是否跳过；miss、误判或查询故障仍进入数据库条件更新。它可以降低重复任务的后续处理开销，但不能替代原子抢占。

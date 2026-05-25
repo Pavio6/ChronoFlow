@@ -45,6 +45,7 @@ CREATE TABLE IF NOT EXISTS timer_records (
     duration        BIGINT COMMENT '执行耗时（毫秒）',
     created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
     updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    UNIQUE KEY uk_timer_trigger_time(timer_id, trigger_time),
     INDEX idx_timer_id(timer_id),
     INDEX idx_trigger_time(trigger_time),
     INDEX idx_status(status)

@@ -15,12 +15,12 @@ import (
 
 // Scheduler 调度器
 // 每隔 scan_interval（默认 1 秒）轮询一次，为每个二维分片抢分布式锁
-// 抢到锁后从协程池提交 Trigger 协程处理该分片
+// 将分片处理提交到协程池，由 worker 抢锁后运行 Trigger
 // 核心流程：
 //  1. 计算当前分钟级时间范围 time_range
 //  2. 分别获取当前分钟和上一分钟的动态分桶数
-//  3. 对每个桶尝试 SETNX 抢锁，TTL 由 lock_expiration 配置（默认 70 秒，大于时间片时长）
-//  4. 抢到锁 → 从协程池提交 Trigger 协程
+//  3. 对每个桶提交 worker 协程
+//  4. worker 创建 owner token 并尝试 SETNX 抢锁，抢到后运行 Trigger
 type Scheduler struct {
 	queue   *redis.RedisQueue
 	pool    *pool.GoWorkerPool
@@ -49,7 +49,7 @@ func NewScheduler(
 }
 
 // Start 启动调度器
-// 每隔 scan_interval 秒轮询一次，为每个分片抢锁并提交 Trigger
+// 每隔 scan_interval 秒轮询一次，为每个分片提交抢锁及 Trigger 处理任务
 func (s *Scheduler) Start(ctx context.Context) {
 	logger.Info("Scheduler 启动",
 		zap.Int("scan_interval", s.cfg.ScanInterval),
@@ -120,7 +120,7 @@ func (s *Scheduler) schedule(ctx context.Context) {
 	}
 }
 
-// handleSlice 处理单个时间片的单个桶：抢锁 → 提交 Trigger
+// handleSlice 处理单个时间片的单个桶：提交 worker → worker 抢锁并运行 Trigger
 func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket int, bucketNum int, lockExpiration time.Duration) {
 	hasWork, err := s.hasSliceWork(ctx, timeRange, bucket, bucketNum)
 	if err != nil {
@@ -135,27 +135,24 @@ func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket in
 		return
 	}
 
-	// 尝试获取分布式锁
-	acquired, err := s.queue.AcquireSchedulerLock(ctx, timeRange, bucket, lockExpiration)
-	if err != nil {
-		logger.Error("Scheduler 获取锁失败",
-			zap.String("time_range", timeRange),
-			zap.Int("bucket", bucket),
-			zap.Error(err),
-		)
-		return
-	}
-
-	// 未获取到锁，跳过（其他实例正在处理）
-	if !acquired {
-		return
-	}
-
-	// 获取到锁，从协程池提交 Trigger 协程
+	// 与 xTimer 一致，在负责处理分片的 worker goroutine 内创建 token 并抢锁。
 	bucketCopy := bucket
 	timeRangeCopy := timeRange
 	err = s.pool.Submit(func() {
-		s.trigger.Run(ctx, timeRangeCopy, bucketCopy, bucketNum)
+		lock := s.queue.NewSchedulerLock(timeRangeCopy, bucketCopy)
+		acquired, lockErr := lock.Lock(ctx, lockExpiration)
+		if lockErr != nil {
+			logger.Error("Scheduler 获取锁失败",
+				zap.String("time_range", timeRangeCopy),
+				zap.Int("bucket", bucketCopy),
+				zap.Error(lockErr),
+			)
+			return
+		}
+		if !acquired {
+			return
+		}
+		s.trigger.Run(ctx, timeRangeCopy, bucketCopy, bucketNum, lock)
 	})
 	if err != nil {
 		logger.Error("Scheduler 提交 Trigger 到协程池失败",
@@ -163,14 +160,6 @@ func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket in
 			zap.Int("bucket", bucketCopy),
 			zap.Error(err),
 		)
-		// 提交失败时释放锁
-		if releaseErr := s.queue.ReleaseSchedulerLock(ctx, timeRangeCopy, bucketCopy); releaseErr != nil {
-			logger.Error("Scheduler 释放锁失败",
-				zap.String("time_range", timeRangeCopy),
-				zap.Int("bucket", bucketCopy),
-				zap.Error(releaseErr),
-			)
-		}
 	}
 }
 
@@ -184,7 +173,7 @@ func (s *Scheduler) hasSliceWork(ctx context.Context, timeRange string, bucket i
 		return true, nil
 	}
 
-	start, err := time.Parse("2006-01-02-15:04", timeRange)
+	start, err := time.ParseInLocation("2006-01-02-15:04", timeRange, time.Local)
 	if err != nil {
 		return false, fmt.Errorf("解析时间范围失败: %w", err)
 	}

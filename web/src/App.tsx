@@ -63,7 +63,6 @@ const App: React.FC = () => {
             <Route index element={<Navigate to="/tasks" replace />} />
             <Route path="tasks" element={<TaskList />} />
             <Route path="tasks/create" element={<TaskForm />} />
-            <Route path="tasks/edit/:id" element={<TaskForm />} />
             <Route path="executions" element={<ExecutionList />} />
             <Route path="monitoring" element={<Monitoring />} />
           </Route>

@@ -40,17 +40,6 @@ export interface CreateTimerRequest {
   timeout?: number;
 }
 
-// 更新定时器请求
-export interface UpdateTimerRequest {
-  name?: string;
-  cron_expr?: string;
-  callback_url?: string;
-  callback_method?: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
-  callback_body?: string;
-  callback_headers?: Record<string, string>;
-  timeout?: number;
-}
-
 // 定时器列表响应
 export interface TimerListResponse {
   total: number;

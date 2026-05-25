@@ -115,21 +115,20 @@ func (q *RedisQueue) BatchPushTasks(ctx context.Context, timeRange string, bucke
 	return nil
 }
 
-// GetDueTasks 获取指定时间片桶中的到期任务（只读不删）
-// 使用 ZRANGEBYSCORE 获取 score <= now 的成员，任务保留在 ZSet 中
-// 防重复依赖分布式锁（同一分片同一时刻只有一个节点处理）
-func (q *RedisQueue) GetDueTasks(ctx context.Context, timeRange string, bucket int, count int64) ([]*TaskTrigger, error) {
+// GetTasksByTime 获取半开区间 [start, end) 中的任务。
+// Trigger 单调推进扫描游标，因此 ZSet 可以保留数据而不在一次处理内重复派发。
+func (q *RedisQueue) GetTasksByTime(ctx context.Context, timeRange string, bucket int, start, end time.Time) ([]*TaskTrigger, error) {
+	if !start.Before(end) {
+		return nil, nil
+	}
 	key := buildQueueKey(timeRange, bucket)
-	now := time.Now().Unix()
 
-	// ZRANGEBYSCORE 获取到期任务，只读不删
 	members, err := q.client.ZRangeByScore(ctx, key, &redis.ZRangeBy{
-		Min:   "-inf",
-		Max:   fmt.Sprintf("%d", now),
-		Count: count,
+		Min: fmt.Sprintf("%d", start.Unix()),
+		Max: fmt.Sprintf("(%d", end.Unix()),
 	}).Result()
 	if err != nil {
-		return nil, fmt.Errorf("获取到期任务失败: %w", err)
+		return nil, fmt.Errorf("按时间窗口获取任务失败: %w", err)
 	}
 
 	if len(members) == 0 {
@@ -162,34 +161,6 @@ func (q *RedisQueue) QueueExists(ctx context.Context, timeRange string, bucket i
 		return false, fmt.Errorf("检查任务队列是否存在失败: %w", err)
 	}
 	return count > 0, nil
-}
-
-// AcquireSchedulerLock 获取调度器分布式锁（SETNX）
-func (q *RedisQueue) AcquireSchedulerLock(ctx context.Context, timeRange string, bucket int, expiration time.Duration) (bool, error) {
-	key := buildLockKey(timeRange, bucket)
-	ok, err := q.client.SetNX(ctx, key, "1", expiration).Result()
-	if err != nil {
-		return false, fmt.Errorf("获取调度器锁失败: %w", err)
-	}
-	return ok, nil
-}
-
-// ReleaseSchedulerLock 释放调度器分布式锁
-func (q *RedisQueue) ReleaseSchedulerLock(ctx context.Context, timeRange string, bucket int) error {
-	key := buildLockKey(timeRange, bucket)
-	if err := q.client.Del(ctx, key).Err(); err != nil {
-		return fmt.Errorf("释放调度器锁失败: %w", err)
-	}
-	return nil
-}
-
-// ExtendSchedulerLock 续期调度器分布式锁
-func (q *RedisQueue) ExtendSchedulerLock(ctx context.Context, timeRange string, bucket int, expiration time.Duration) error {
-	key := buildLockKey(timeRange, bucket)
-	if err := q.client.Expire(ctx, key, expiration).Err(); err != nil {
-		return fmt.Errorf("续期调度器锁失败: %w", err)
-	}
-	return nil
 }
 
 // buildBucketMapKey 构建分桶映射的完整 key

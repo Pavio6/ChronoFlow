@@ -21,8 +21,8 @@ const (
 // TimerRecord 定时器执行记录
 type TimerRecord struct {
 	ID            int64        `gorm:"primaryKey;autoIncrement" json:"id"`
-	TimerID       int64        `gorm:"index;not null;comment:定时器ID" json:"timer_id"`
-	TriggerTime   time.Time    `gorm:"index;not null;comment:执行时间" json:"trigger_time"`
+	TimerID       int64        `gorm:"index;uniqueIndex:uk_timer_trigger_time;not null;comment:定时器ID" json:"timer_id"`
+	TriggerTime   time.Time    `gorm:"index;uniqueIndex:uk_timer_trigger_time;not null;comment:执行时间" json:"trigger_time"`
 	Status        RecordStatus `gorm:"size:32;not null;default:PENDING;comment:执行状态" json:"status"`
 	RequestURL    string       `gorm:"size:512;comment:请求URL" json:"request_url"`
 	RequestMethod string       `gorm:"size:16;comment:请求方法" json:"request_method"`

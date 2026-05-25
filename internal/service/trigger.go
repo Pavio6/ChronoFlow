@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"fmt"
 	"time"
 
 	"github.com/chronoflow/internal/config"
@@ -18,11 +17,12 @@ import (
 // 读取到期任务后从协程池提交 Executor 协程执行
 // 核心流程：
 //  1. 在时间片内持续轮询 Redis ZSet {time_range}:{bucket}
-//  2. 每轮循环续期锁 TTL（参考 xTimer successExpireSeconds），防止空闲时锁过期
-//  3. ZRANGEBYSCORE 获取 score <= now 的到期任务（只读不删）
+//  2. 以不重叠的 [cursor, dueEnd) 时间窗口读取到期任务
+//  3. 分片扫描成功后将锁保留 success_expiration，抑制上一分钟回扫重入
 //  4. 若 Redis 无结果，回退查询 MySQL（冷启动兜底）
 //  5. 从协程池提交 Executor 协程执行每个任务
-// 防重复机制：任务保留在 ZSet 中，依赖分布式锁保证同一分片同一时刻只有一个节点处理
+//
+// 防重复机制：窗口游标避免单次扫描重复派发，Executor 原子状态抢占负责最终防重
 // DB 回退：冷启动时 Migrator 尚未预创建 Redis 数据，Trigger 从 MySQL 读取 PENDING 记录兜底
 type Trigger struct {
 	queue    *redis.RedisQueue
@@ -53,36 +53,28 @@ func NewTrigger(
 // timeRange: 时间范围标识（YYYY-MM-DD-HH:mm）
 // bucket: 桶号
 // bucketNum: 总桶数（用于 DB 回退时按 timer_id % bucketNum 过滤）
+// lock: Scheduler worker 获取的、带所有者 token 的分片锁
 // 此方法由 Scheduler 通过协程池调用
-func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketNum int) {
+func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketNum int, lock *redis.SchedulerLock) {
 	start := time.Now()
 	logger.Debug("Trigger 开始处理",
 		zap.String("time_range", timeRange),
 		zap.Int("bucket", bucket),
 	)
 
-	// 计算时间片结束时间（当前分钟结束）
-	// 在时间片内持续轮询，直到时间片过期或无更多到期任务
-	timeSliceEnd := calculateTimeSliceEnd(timeRange)
+	timeSliceStart, err := time.ParseInLocation("2006-01-02-15:04", timeRange, time.Local)
+	if err != nil {
+		logger.Error("Trigger 解析时间片失败", zap.String("time_range", timeRange), zap.Error(err))
+		return
+	}
+	timeSliceEnd := timeSliceStart.Add(time.Minute)
+	cursor := timeSliceStart
 
-	// 每次批量取出的任务数量
-	batchSize := int64(100)
-
-	// 锁续期时间，参考 xTimer successExpireSeconds
-	// 每轮循环续期一次，防止空闲时锁提前过期导致并发重复执行
+	// 与 xTimer 一致，完整分片成功扫描后才将锁延长为成功保留 TTL。
 	successExpiration := time.Duration(t.cfg.SuccessExpiration) * time.Second
+	completed := true
 
-	for {
-		// 检查是否已超过时间片
-		if time.Now().After(timeSliceEnd) {
-			logger.Debug("Trigger 时间片结束",
-				zap.String("time_range", timeRange),
-				zap.Int("bucket", bucket),
-				zap.Duration("elapsed", time.Since(start)),
-			)
-			break
-		}
-
+	for cursor.Before(timeSliceEnd) {
 		// 检查 context 是否已取消
 		select {
 		case <-ctx.Done():
@@ -91,18 +83,19 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
 		default:
 		}
 
-		// 每轮循环续期锁 TTL，防止空闲时锁过期
-		if err := t.queue.ExtendSchedulerLock(ctx, timeRange, bucket, successExpiration); err != nil {
-			logger.Warn("Trigger 续期锁失败",
-				zap.String("time_range", timeRange),
-				zap.Int("bucket", bucket),
-				zap.Error(err),
-			)
+		dueEnd := time.Now().Truncate(time.Second).Add(time.Second)
+		if dueEnd.After(timeSliceEnd) {
+			dueEnd = timeSliceEnd
+		}
+		if !cursor.Before(dueEnd) {
+			time.Sleep(100 * time.Millisecond)
+			continue
 		}
 
-		// 从 Redis ZSet 获取到期任务（只读不删，依赖分布式锁防重）
-		triggers, err := t.queue.GetDueTasks(ctx, timeRange, bucket, batchSize)
+		// 只扫描尚未处理的半开区间，ZSet 中的数据无需为派发防重而删除。
+		triggers, err := t.queue.GetTasksByTime(ctx, timeRange, bucket, cursor, dueEnd)
 		if err != nil {
+			completed = false
 			logger.Error("Trigger 获取到期任务失败",
 				zap.String("time_range", timeRange),
 				zap.Int("bucket", bucket),
@@ -115,67 +108,65 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
 
 		// Redis 无结果时，回退查询 MySQL（冷启动兜底）
 		if len(triggers) == 0 {
-			triggers, err = t.getDueTasksFromDB(ctx, timeRange, bucket, bucketNum)
+			triggers, err = t.getDueTasksFromDB(ctx, timeRange, bucket, bucketNum, cursor, dueEnd)
 			if err != nil {
+				completed = false
 				logger.Error("Trigger DB 回退查询失败",
 					zap.String("time_range", timeRange),
 					zap.Int("bucket", bucket),
 					zap.Error(err),
 				)
+				time.Sleep(100 * time.Millisecond)
+				continue
 			}
 		}
 
-		// 无到期任务，短暂等待后继续轮询
-		if len(triggers) == 0 {
-			time.Sleep(500 * time.Millisecond)
-			continue
-		}
+		if len(triggers) > 0 {
+			logger.Debug("Trigger 取出到期任务",
+				zap.String("time_range", timeRange),
+				zap.Int("bucket", bucket),
+				zap.Int("count", len(triggers)),
+			)
 
-		logger.Debug("Trigger 取出到期任务",
-			zap.String("time_range", timeRange),
-			zap.Int("bucket", bucket),
-			zap.Int("count", len(triggers)),
-		)
-
-		// 为每个到期任务提交 Executor 协程
-		for _, trigger := range triggers {
-			triggerCopy := trigger // 捕获循环变量
-			err := t.pool.Submit(func() {
-				t.executor.Execute(ctx, triggerCopy)
-			})
-			if err != nil {
-				logger.Error("Trigger 提交 Executor 到协程池失败",
-					zap.Int64("timer_id", triggerCopy.TimerID),
-					zap.Error(err),
-				)
+			// 为每个到期任务提交 Executor 协程
+			for _, trigger := range triggers {
+				triggerCopy := trigger // 捕获循环变量
+				err := t.pool.Submit(func() {
+					t.executor.Execute(ctx, triggerCopy)
+				})
+				if err != nil {
+					completed = false
+					logger.Error("Trigger 提交 Executor 到协程池失败",
+						zap.Int64("timer_id", triggerCopy.TimerID),
+						zap.Error(err),
+					)
+				}
 			}
 		}
+		cursor = dueEnd
 	}
-}
 
-// calculateTimeSliceEnd 计算时间片结束时间
-// 时间片按分钟划分，结束时间是当前分钟的 59 秒
-func calculateTimeSliceEnd(timeRange string) (t time.Time) {
-	parsed, err := time.Parse("2006-01-02-15:04", timeRange)
-	if err != nil {
-		// 解析失败时返回当前时间 + 1 分钟
-		return time.Now().Add(time.Minute)
+	if completed {
+		if err := lock.Extend(ctx, successExpiration); err != nil {
+			logger.Warn("Trigger 完成后保留锁失败",
+				zap.String("time_range", timeRange),
+				zap.Int("bucket", bucket),
+				zap.Error(err),
+			)
+		}
 	}
-	// 时间片结束 = 当前分钟的 59 秒
-	return parsed.Add(time.Minute).Add(-time.Second)
+
+	logger.Debug("Trigger 时间片扫描完成",
+		zap.String("time_range", timeRange),
+		zap.Int("bucket", bucket),
+		zap.Bool("completed", completed),
+		zap.Duration("elapsed", time.Since(start)),
+	)
 }
 
 // getDueTasksFromDB DB 回退：当 Redis 缓存 miss 时，从 MySQL 查询 PENDING 记录
-// 过滤条件：status = PENDING, trigger_time 在当前分钟范围内, timer_id % bucketNum == bucket
-func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucket int, bucketNum int) ([]*redis.TaskTrigger, error) {
-	// 解析时间范围
-	start, err := time.Parse("2006-01-02-15:04", timeRange)
-	if err != nil {
-		return nil, fmt.Errorf("解析时间范围失败: %w", err)
-	}
-	end := start.Add(time.Minute)
-
-	// 查询 PENDING 记录
+// 过滤条件：status = PENDING, trigger_time 在当前扫描窗口内, timer_id % bucketNum == bucket
+func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucket int, bucketNum int, start, end time.Time) ([]*redis.TaskTrigger, error) {
 	records, err := t.recRepo.GetPendingByTimeRange(start, end)
 	if err != nil {
 		return nil, err

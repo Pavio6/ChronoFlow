@@ -27,7 +27,11 @@ type TimerRecordRepository interface {
 	GetRunningRecords(timeout time.Duration) ([]*model.TimerRecord, error)
 	// UpdateStatus 更新执行记录状态
 	UpdateStatus(id int64, status model.RecordStatus) error
-	// ExistsByTimerIDAndTriggerTime 幂等性检查：判断指定定时器在指定触发时间是否已有非 PENDING 状态的记录
+	// ClaimPendingByTimerIDAndTriggerTime 原子抢占一个待执行记录；仅 PENDING 可以进入 RUNNING
+	ClaimPendingByTimerIDAndTriggerTime(timerID int64, triggerTime, startedAt time.Time) (*model.TimerRecord, bool, error)
+	// HasStartedByTimerIDAndTriggerTime 判断执行记录是否已被领取或完成，供 Bloom 命中后确认
+	HasStartedByTimerIDAndTriggerTime(timerID int64, triggerTime time.Time) (bool, error)
+	// ExistsByTimerIDAndTriggerTime 幂等性检查：判断指定定时器在指定触发时间是否已有记录
 	ExistsByTimerIDAndTriggerTime(timerID int64, triggerTime time.Time) (bool, error)
 	// GetPendingByTimeRange 获取指定时间范围内的 PENDING 记录（Trigger DB 回退用）
 	GetPendingByTimeRange(start, end time.Time) ([]*model.TimerRecord, error)
@@ -170,13 +174,57 @@ func (r *timerRecordRepo) UpdateStatus(id int64, status model.RecordStatus) erro
 	return nil
 }
 
-// ExistsByTimerIDAndTriggerTime 幂等性检查
-// 判断指定定时器在指定触发时间是否已有非 PENDING 状态的记录
-// 用于防止重复创建执行记录
-func (r *timerRecordRepo) ExistsByTimerIDAndTriggerTime(timerID int64, triggerTime time.Time) (bool, error) {
+// ClaimPendingByTimerIDAndTriggerTime 原子将唯一执行记录从 PENDING 转换为 RUNNING。
+// 状态更新成功的执行器才有权触发外部回调。
+func (r *timerRecordRepo) ClaimPendingByTimerIDAndTriggerTime(timerID int64, triggerTime, startedAt time.Time) (*model.TimerRecord, bool, error) {
+	var record model.TimerRecord
+	claimed := false
+
+	err := r.db.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&model.TimerRecord{}).
+			Where("timer_id = ? AND trigger_time = ? AND status = ?", timerID, triggerTime, model.RecordStatusPending).
+			Updates(map[string]interface{}{
+				"status":     model.RecordStatusRunning,
+				"started_at": startedAt,
+			})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+
+		claimed = true
+		return tx.Where("timer_id = ? AND trigger_time = ?", timerID, triggerTime).First(&record).Error
+	})
+	if err != nil {
+		return nil, false, fmt.Errorf("抢占待执行记录失败: %w", err)
+	}
+	if !claimed {
+		return nil, false, nil
+	}
+	return &record, true, nil
+}
+
+// HasStartedByTimerIDAndTriggerTime 判断记录是否已离开 PENDING 状态。
+// Bloom Filter 可能误判，因此命中后仍必须使用 MySQL 状态确认。
+func (r *timerRecordRepo) HasStartedByTimerIDAndTriggerTime(timerID int64, triggerTime time.Time) (bool, error) {
 	var count int64
 	err := r.db.Model(&model.TimerRecord{}).
 		Where("timer_id = ? AND trigger_time = ? AND status != ?", timerID, triggerTime, model.RecordStatusPending).
+		Count(&count).Error
+	if err != nil {
+		return false, fmt.Errorf("查询执行状态失败: %w", err)
+	}
+	return count > 0, nil
+}
+
+// ExistsByTimerIDAndTriggerTime 幂等性检查
+// 判断指定定时器在指定触发时间是否已有任意状态的记录，用于防止重复创建。
+func (r *timerRecordRepo) ExistsByTimerIDAndTriggerTime(timerID int64, triggerTime time.Time) (bool, error) {
+	var count int64
+	err := r.db.Model(&model.TimerRecord{}).
+		Where("timer_id = ? AND trigger_time = ?", timerID, triggerTime).
 		Count(&count).Error
 	if err != nil {
 		return false, fmt.Errorf("幂等性检查查询失败: %w", err)

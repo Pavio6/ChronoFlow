@@ -25,11 +25,10 @@ func NewTimerHandler(timerSvc *service.TimerService) *TimerHandler {
 func (h *TimerHandler) RegisterRoutes(r *gin.Engine) {
 	api := r.Group("/api/v1")
 	{
-		// 定时器定义 CRUD
+		// 定时器定义创建后不可修改，仅允许查询、删除和状态变更
 		api.POST("/timers", h.CreateTimer)
 		api.GET("/timers", h.ListTimers)
 		api.GET("/timers/:id", h.GetTimer)
-		api.PUT("/timers/:id", h.UpdateTimer)
 		api.DELETE("/timers/:id", h.DeleteTimer)
 
 		// 定时器状态管理
@@ -94,43 +93,6 @@ func (h *TimerHandler) GetTimer(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code": http.StatusOK,
 		"data": def,
-	})
-}
-
-// UpdateTimer 更新定时器
-// PUT /api/v1/timers/:id
-func (h *TimerHandler) UpdateTimer(c *gin.Context) {
-	id, err := parseID(c, "id")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    http.StatusBadRequest,
-			"message": "无效的 ID",
-		})
-		return
-	}
-
-	var req model.UpdateTimerDefinitionRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    http.StatusBadRequest,
-			"message": "请求参数无效: " + err.Error(),
-		})
-		return
-	}
-
-	def, err := h.timerSvc.Update(id, &req)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    http.StatusBadRequest,
-			"message": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code":    http.StatusOK,
-		"message": "更新成功",
-		"data":    def,
 	})
 }
 

@@ -1,146 +1,113 @@
 # 分布式锁与幂等
 
-## 分布式锁
+## 分片锁
 
-### 实现方式
+ChronoFlow 以 `{time_range}:{bucket}` 为锁粒度。锁保护的是一分钟分片的扫描和派发，不是 HTTP 回调的完整执行周期。
 
-ChronoFlow 使用 Redis SETNX 实现分布式锁，锁粒度为 `{time_range}:{bucket}`。
-
-```go
-// 获取锁
-func (q *RedisQueue) AcquireSchedulerLock(ctx context.Context, timeRange string, bucket int, expiration time.Duration) (bool, error) {
-    key := fmt.Sprintf("chronoflow:scheduler_lock:%s:%d", timeRange, bucket)
-    return q.client.SetNX(ctx, key, "1", expiration).Result()
-}
-```
-
-### 锁的 Key 格式
-
-```
+```text
 chronoflow:scheduler_lock:{YYYY-MM-DD-HH:mm}:{bucket}
 ```
 
-示例：
-```
-chronoflow:scheduler_lock:2026-05-22-10:05:0   # 10:05 第 0 桶
-chronoflow:scheduler_lock:2026-05-22-10:05:1   # 10:05 第 1 桶
-chronoflow:scheduler_lock:2026-05-22-10:05:2   # 10:05 第 2 桶
-```
+### 获取与所有权
 
-### 锁的生命周期
+与 xtimer 一致，Scheduler 先将分片处理提交到 worker pool；处理该分片的 worker 创建锁对象，并使用 `GetProcessAndGoroutineIDStr()` 生成 token：
 
-```
-Scheduler 获取锁 (TTL=70s, lock_expiration)
-    │
-    ▼
-提交 Trigger 到协程池
-    │
-    ▼
-Trigger 开始处理
-    │
-    ▼
-每轮循环续期锁 TTL (130s, success_expiration)  ←── 防止空闲时锁过期
-    │
-    ▼
-时间片结束 → 锁自然过期
+```go
+lock := queue.NewSchedulerLock(timeRange, bucket) // token = processID_goroutineID
+acquired, err := lock.Lock(ctx, 70*time.Second)
+if acquired {
+    trigger.Run(ctx, timeRange, bucket, bucketNum, lock)
+}
 ```
 
-### 锁的安全性
+锁 value 为 token。Trigger 完整扫描分片后调用 `lock.Extend`；该操作通过 Lua 先校验 Redis 中的 token 是否仍属于当前 worker，再执行 `EXPIRE`。`lock.Release` 同样通过 Lua 校验后删除。
 
-1. **互斥性**：SETNX 保证同一 `{time_range}:{bucket}` 只有一个实例获取锁
-2. **防死锁**：锁有 TTL（默认 70 秒），即使持有者崩溃，锁也会自动过期
-3. **续期机制**：Trigger 每轮循环续期锁 TTL（默认 130 秒），防止空闲时锁提前过期导致并发重复执行
-
-### 多实例协调
-
-```
-实例 A: Scheduler → 获取锁 bucket:0 ✓ → 提交 Trigger
-实例 B: Scheduler → 获取锁 bucket:0 ✗ → 跳过
-实例 A: Scheduler → 获取锁 bucket:1 ✗ → 跳过
-实例 B: Scheduler → 获取锁 bucket:1 ✓ → 提交 Trigger
+```lua
+if redis.call("GET", KEYS[1]) == ARGV[1] then
+    return redis.call("EXPIRE", KEYS[1], ARGV[2])
+end
+return 0
 ```
 
-## 幂等控制
+如果旧 Trigger 的租约已经过期，而同名分片锁已被另一个 worker 重新取得，旧 Trigger 无法续期或释放新锁。任务执行幂等仍不依赖该锁，由 MySQL 原子状态抢占保证。
 
-### 两层幂等架构
+### `70s` 与 `130s`
 
+```text
+Scheduler 取得分片锁，初始 TTL = 70s
+    |
+    v
+Trigger 以不重叠窗口扫描完整分钟分片，并提交 Executor
+    |
+    v
+扫描无错误完成后，Lua 校验 token，将 TTL 重置为 130s
+    |
+    v
+锁自然过期；期间抑制 Scheduler 对当前/上一分钟分片重入
 ```
-请求到达
-    │
-    ▼
-┌─────────────────┐
-│  Bloom Filter   │ ← 第一层：快速过滤
-│  (Redis Bitmap) │    误判率约 1%
-└────────┬────────┘
-         │ hit
-         ▼
-┌─────────────────┐
-│  MySQL 查询     │ ← 第二层：最终确认
-│  (执行记录表)    │    查记录状态 status != PENDING
-└─────────────────┘
-         │
-         ▼
-    已执行 → 跳过
+
+- `lock_expiration = 70s`：覆盖 60 秒分片处理，并保留调度余量。
+- `success_expiration = 130s`：分片派发成功后的保留租约，覆盖上一分钟回扫窗口。
+- `130s` 不表示任务执行期间一直持锁；Executor 的 HTTP 回调是异步执行的。
+
+## 派发防重
+
+Redis ZSet 中的任务在读取后仍然保留，以便进程异常后能够补扫。Trigger 不再重复读取 `score <= now` 的累计范围，而是推进扫描游标：
+
+```text
+[10:05:00, 10:05:01)
+[10:05:01, 10:05:02)
+...
+[10:05:59, 10:06:00)
 ```
+
+同一次 Trigger 运行中，每个触发时间只落入一个窗口。对于已经过去但需要恢复的上一分钟分片，Trigger 会直接扫描完整历史区间。
+
+窗口扫描降低重复派发，但不是最终执行幂等屏障：锁失效或节点故障后仍允许重新派发尚未完成的任务。
+
+## 执行幂等
+
+### 创建唯一性
+
+`timer_records` 具有业务唯一键：
+
+```sql
+UNIQUE KEY uk_timer_trigger_time (timer_id, trigger_time)
+```
+
+Migrator 与激活流程的存在性检查会识别任意状态的既有记录，数据库唯一约束负责处理并发竞争下的最终一致性。
+
+已有数据库升级前需要先检查历史重复记录，再执行 `migrations/002_timer_records_unique_key.sql`：
+
+```sql
+SELECT timer_id, trigger_time, COUNT(*)
+FROM timer_records
+GROUP BY timer_id, trigger_time
+HAVING COUNT(*) > 1;
+```
+
+### 回调执行权
+
+Executor 在调用外部 HTTP 回调前执行条件更新：
+
+```sql
+UPDATE timer_records
+SET status = 'RUNNING', started_at = ?
+WHERE timer_id = ? AND trigger_time = ? AND status = 'PENDING';
+```
+
+- `RowsAffected = 1`：当前 Executor 获得执行权，可以发起回调。
+- `RowsAffected = 0`：任务已被其他 Executor 领取或已完成，直接跳过。
+
+因此，即使一个 ZSet member 因故障恢复而被重复派发，也只有一个 Executor 能从数据库获得执行许可。
 
 ### Bloom Filter
 
-**原理**：使用 SHA1 + Murmur3 双哈希，在 Redis Bitmap 中设置两个位。
+Bloom Filter 参考 xtimer 同时用于读写路径：
 
-```go
-// 检查
-func (f *Filter) Exist(ctx context.Context, key, val string) (bool, error) {
-    bit1 := hashSHA1(val) % MaxBits
-    bit2 := hashMurmur3(val) % MaxBits
-    
-    pipe := f.client.Pipeline()
-    cmd1 := pipe.GetBit(ctx, key, int64(bit1))
-    cmd2 := pipe.GetBit(ctx, key, int64(bit2))
-    pipe.Exec(ctx)
-    
-    return cmd1.Val() == 1 && cmd2.Val() == 1, nil
-}
+1. Executor 启动时先查询 Bloom Filter。
+2. 命中时查询 MySQL 状态确认；已离开 `PENDING` 的任务可提前跳过。
+3. miss、误判或 Bloom 查询异常时，继续走数据库 `PENDING -> RUNNING` 原子抢占。
+4. HTTP 回调成功后写入 Bloom Filter，供后续重复派发快速过滤。
 
-// 设置
-func (f *Filter) Set(ctx context.Context, key, val string, expireSeconds int64) error {
-    bit1 := hashSHA1(val) % MaxBits
-    bit2 := hashMurmur3(val) % MaxBits
-    
-    pipe := f.client.Pipeline()
-    pipe.SetBit(ctx, key, int64(bit1), 1)
-    pipe.SetBit(ctx, key, int64(bit2), 1)
-    pipe.Exec(ctx)
-    
-    return nil
-}
-```
-
-**Key 格式**：`chronoflow:bloom:{YYYY-MM-DD}`（按天分片）
-
-**Value 格式**：`{timer_id}:{trigger_time_ms}`
-
-**过期时间**：24 小时（自动清理历史数据）
-
-### MySQL 查重
-
-```go
-func (r *timerRecordRepo) ExistsByTimerIDAndTriggerTime(timerID int64, triggerTime time.Time) (bool, error) {
-    var count int64
-    r.db.Model(&model.TimerRecord{}).
-        Where("timer_id = ? AND trigger_time = ? AND status != ?", timerID, triggerTime, model.RecordStatusPending).
-        Count(&count)
-    return count > 0, nil
-}
-```
-
-查询条件：同一 `timer_id` + `trigger_time` 且状态不是 PENDING 的记录。
-
-### 两层幂等的性能分析
-
-| 场景 | Bloom Filter | MySQL | 总延迟 |
-|------|-------------|-------|--------|
-| 首次执行 | miss → 执行 | - | ~0.1ms |
-| 重复执行（99%） | hit → 跳过 | - | ~0.1ms |
-| 重复执行（1% 误判） | hit → MySQL 确认 | hit → 跳过 | ~2ms |
-
-99% 的重复任务在 Bloom Filter 层就被拦截，1% 穿透到 MySQL。
+Bloom Filter 是前置性能优化，不能代替数据库条件更新，因为它存在误判且无法关闭并发竞争窗口。

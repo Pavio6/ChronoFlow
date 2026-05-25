@@ -47,30 +47,19 @@ type CreateTimerDefinitionRequest struct {
 	Timeout         int               `json:"timeout" binding:"min=1,max=300"`
 }
 
-// UpdateTimerDefinitionRequest 更新定时器请求（使用指针字段实现部分更新）
-type UpdateTimerDefinitionRequest struct {
-	Name            *string            `json:"name" binding:"omitempty,min=1,max=128"`
-	CronExpr        *string            `json:"cron_expr" binding:"omitempty"`
-	CallbackURL     *string            `json:"callback_url" binding:"omitempty,url"`
-	CallbackMethod  *string            `json:"callback_method" binding:"omitempty,oneof=GET POST PUT DELETE PATCH"`
-	CallbackBody    *string            `json:"callback_body"`
-	CallbackHeaders *map[string]string `json:"callback_headers"`
-	Timeout         *int               `json:"timeout" binding:"omitempty,min=1,max=300"`
-}
-
 // TimerDefinitionListRequest 定时器列表查询请求
 type TimerDefinitionListRequest struct {
-	Page     int          `form:"page" binding:"min=1"`
-	PageSize int          `form:"page_size" binding:"min=1,max=100"`
-	App      string       `form:"app"`
-	Status   TimerStatus  `form:"status"`
-	Keyword  string       `form:"keyword"`
+	Page     int         `form:"page" binding:"min=1"`
+	PageSize int         `form:"page_size" binding:"min=1,max=100"`
+	App      string      `form:"app"`
+	Status   TimerStatus `form:"status"`
+	Keyword  string      `form:"keyword"`
 }
 
 // TimerDefinitionListResponse 定时器列表查询响应
 type TimerDefinitionListResponse struct {
-	Total    int64               `json:"total"`
-	Page     int                 `json:"page"`
-	PageSize int                 `json:"page_size"`
-	Items    []*TimerDefinition  `json:"items"`
+	Total    int64              `json:"total"`
+	Page     int                `json:"page"`
+	PageSize int                `json:"page_size"`
+	Items    []*TimerDefinition `json:"items"`
 }

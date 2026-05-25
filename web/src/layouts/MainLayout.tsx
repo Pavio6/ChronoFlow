@@ -27,9 +27,7 @@ const MainLayout: React.FC = () => {
     ? { title: '执行记录', desc: '查看回调状态、耗时和失败原因' }
     : location.pathname.includes('/create')
       ? { title: '创建任务', desc: '配置 Cron、回调和执行超时' }
-      : location.pathname.includes('/edit')
-        ? { title: '编辑任务', desc: '调整任务定义和执行参数' }
-        : { title: '任务管理', desc: '管理定时任务定义、状态和回调目标' };
+      : { title: '任务管理', desc: '管理定时任务定义、状态和回调目标' };
 
   return (
     <Layout className="app-shell">
@@ -65,7 +63,7 @@ const MainLayout: React.FC = () => {
             <h1>{pageMeta.title}</h1>
             <p>{pageMeta.desc}</p>
           </div>
-          {!location.pathname.includes('/create') && !location.pathname.includes('/edit') && (
+          {!location.pathname.includes('/create') && (
             <Button
               type="primary"
               icon={<PlusOutlined />}

@@ -98,8 +98,8 @@ bucket = timer_id % bucket_num
 
 - 每秒轮询一次
 - 计算当前时间范围
-- 对每个桶尝试抢分布式锁
-- 抢到锁后提交 Trigger 到协程池
+- 对每个桶提交分片处理 worker
+- worker 创建 token、抢到分布式锁后运行 Trigger
 
 ### 执行流程
 
@@ -129,19 +129,22 @@ func (s *Scheduler) schedule(ctx context.Context) {
 }
 
 func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket int, bucketNum int, lockExpiration time.Duration) {
-    acquired, _ := s.queue.AcquireSchedulerLock(ctx, timeRange, bucket, lockExpiration)
-    if acquired {
-        s.pool.Submit(func() {
-            s.trigger.Run(ctx, timeRange, bucket, bucketNum)
-        })
-    }
+    s.pool.Submit(func() {
+        lock := s.queue.NewSchedulerLock(timeRange, bucket)
+        acquired, _ := lock.Lock(ctx, lockExpiration)
+        if acquired {
+            s.trigger.Run(ctx, timeRange, bucket, bucketNum, lock)
+        }
+    })
 }
 ```
 
 ### 锁策略
 
 - 锁初始 TTL = `lock_expiration`（默认 70 秒，参考 xTimer `tryLockSeconds`，必须大于时间片时长 60 秒）
-- Trigger 每轮循环续期锁 TTL = `success_expiration`（默认 130 秒，参考 xTimer `successExpireSeconds`）
+- Trigger 成功扫描完整分片后将锁 TTL 设置为 `success_expiration`（默认 130 秒，参考 xTimer `successExpireSeconds`）
+- 锁 token = `GetProcessAndGoroutineIDStr()`，由执行该分片的 worker goroutine 生成
+- `Extend` / `Release` 通过 Lua 比较 token，仅当前锁持有者能够操作锁
 - 锁粒度：每个 `{time_range}:{bucket}` 一把锁
 - 多实例部署时，同一分片只会被一个实例处理
 - 动态分桶：当前分钟和上一分钟分别获取各自的 bucketNum，避免桶数不一致导致遗漏或越界
@@ -155,37 +158,28 @@ func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket in
 ### 核心职责
 
 - 在时间片内持续轮询 Redis ZSet
-- 每轮循环续期锁 TTL（参考 xTimer successExpireSeconds），防止空闲时锁过期
+- 用不重叠扫描窗口读取到期任务，避免一次 Trigger 重复派发同一 member
+- 扫描成功后保留锁 TTL（参考 xTimer successExpireSeconds），覆盖上一分钟回扫
 - Redis 无结果时回退查询 MySQL（冷启动兜底）
 - 提交 Executor 到协程池
 
 ### 执行流程
 
 ```go
-func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketNum int) {
-    timeSliceEnd := calculateTimeSliceEnd(timeRange)
-    
-    // 锁续期时间，参考 xTimer successExpireSeconds
+func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketNum int, lock *redis.SchedulerLock) {
+    timeSliceStart, timeSliceEnd := parseMinuteRange(timeRange)
+    cursor := timeSliceStart
     successExpiration := time.Duration(t.cfg.SuccessExpiration) * time.Second
-    
-    for {
-        // 检查时间片是否结束
-        if time.Now().After(timeSliceEnd) { break }
-        
-        // 每轮循环续期锁 TTL，防止空闲时锁过期
-        t.queue.ExtendSchedulerLock(ctx, timeRange, bucket, successExpiration)
-        
-        // 从 Redis 获取到期任务
-        triggers, _ := t.queue.GetDueTasks(ctx, timeRange, bucket, batchSize)
+
+    for cursor.Before(timeSliceEnd) {
+        dueEnd := min(nextWholeSecond(time.Now()), timeSliceEnd)
+        if !cursor.Before(dueEnd) { continue }
+
+        triggers, _ := t.queue.GetTasksByTime(ctx, timeRange, bucket, cursor, dueEnd)
         
         // Redis 无结果时，回退查询 MySQL（冷启动兜底）
         if len(triggers) == 0 {
-            triggers, _ = t.getDueTasksFromDB(ctx, timeRange, bucket, bucketNum)
-        }
-        
-        if len(triggers) == 0 {
-            time.Sleep(500 * time.Millisecond) // 无任务时短暂等待
-            continue
+            triggers, _ = t.getDueTasksFromDB(ctx, timeRange, bucket, bucketNum, cursor, dueEnd)
         }
         
         // 提交 Executor
@@ -194,14 +188,13 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
                 t.executor.Execute(ctx, trigger)
             })
         }
+        cursor = dueEnd
     }
+    lock.Extend(ctx, successExpiration)
 }
 
 // getDueTasksFromDB DB 回退：查询 MySQL 中 PENDING 状态的记录
-func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucket int, bucketNum int) ([]*redis.TaskTrigger, error) {
-    start, _ := time.Parse("2006-01-02-15:04", timeRange)
-    end := start.Add(time.Minute)
-    
+func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucket int, bucketNum int, start, end time.Time) ([]*redis.TaskTrigger, error) {
     records, _ := t.recRepo.GetPendingByTimeRange(start, end)
     
     var triggers []*redis.TaskTrigger
@@ -222,9 +215,9 @@ func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucke
 
 时间片按分钟划分：
 - 开始时间：`time_range` 对应的分钟
-- 结束时间：该分钟的 59 秒
+- 结束边界：下一分钟起点（不包含）
 
-例如 `time_range = "2026-05-22-10:05"`，则时间片为 `10:05:00 ~ 10:05:59`。
+例如 `time_range = "2026-05-22-10:05"`，则时间片为 `[10:05:00, 10:06:00)`。历史分钟补扫时会立即完成全片读取。
 
 ## Executor 详解
 
@@ -234,7 +227,8 @@ func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucke
 
 ### 核心职责
 
-- 两层幂等去重
+- Bloom Filter 快速过滤已完成的重复任务
+- 通过数据库原子状态抢占取得最终执行权
 - 查询定时器定义
 - 执行 HTTP 回调
 - 更新执行记录状态
@@ -242,29 +236,33 @@ func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucke
 ### 执行流程
 
 ```
-1. Bloom Filter 查重
-   ├─ miss → 继续执行
-   └─ hit → MySQL 查记录状态
-            ├─ status != PENDING → 跳过（已执行）
-            └─ status == PENDING → 执行（bloom 误判）
+1. Bloom Filter 快速查询
+   ├─ miss/查询失败 → 继续
+   └─ hit → MySQL 确认已处理则跳过；若为误判则继续
 
-2. 查询定时器定义
+2. 查询 MySQL 中的实时状态
+   ├─ ACTIVE → 继续执行
+   └─ INACTIVE/DELETED → 跳过，不删除 Redis ZSet 中已打点数据
+
+3. 查询不可变的定时器执行配置
    ├─ 内存缓存命中 → 直接使用
    └─ 缓存未命中 → 查 MySQL → 写入缓存
 
-3. 检查定时器状态
-   ├─ ACTIVE → 继续执行
-   └─ INACTIVE/DELETED → 跳过
+4. 原子状态抢占
+   ├─ PENDING -> RUNNING 更新成功 → 获得回调执行权
+   └─ 更新行数为 0 → 已被领取或完成，跳过
 
-4. 执行 HTTP 回调
+5. 执行 HTTP 回调
    ├─ 成功 → 记录 response_code/response_body
    └─ 失败 → 标记为 FAILED
 
-5. 后处理
-   - 执行成功 → Bloom Filter 打点
+6. 后处理
+   - 执行成功 → Bloom Filter 打点，用于后续快速过滤
    - 更新 MySQL 记录
    - 上报 Prometheus 指标
 ```
+
+定时器定义在创建后不提供修改操作；如需改变 Cron 或回调参数，需要删除旧定义并新建。由于可变化的状态不从本地缓存读取，停用和删除会在各执行节点后续的状态检查中生效，不受缓存 TTL 延迟影响；已经开始执行的回调不在此保证范围内。
 
 ## 模块间通信
 

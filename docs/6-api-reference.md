@@ -87,20 +87,9 @@ GET /api/v1/timers?page=1&page_size=10&app=order-service&status=ACTIVE&keyword=�
 GET /api/v1/timers/:id
 ```
 
-### 更新定时器
+### 定义不可修改
 
-```
-PUT /api/v1/timers/:id
-```
-
-**请求体（部分更新）：**
-
-```json
-{
-  "name": "新名称",
-  "timeout": 60
-}
-```
+定时器定义创建后不可修改，包括 Cron、回调参数和超时配置。系统不提供 `PUT /api/v1/timers/:id` 接口；需要修改定义时，应删除旧定时器并创建新定时器。
 
 ### 删除定时器
 
@@ -124,7 +113,7 @@ POST /api/v1/timers/:id/activate
 POST /api/v1/timers/:id/deactivate
 ```
 
-状态转换：ACTIVE → INACTIVE。停用后不再创建新的执行记录。
+状态转换：ACTIVE → INACTIVE。停用后不再创建新的执行记录，也不会删除已经写入 Redis ZSet 的点；这些点被 Trigger 唤起后，Executor 会从 MySQL 校验当前状态并直接跳过非 `ACTIVE` 定时器。
 
 ## 执行记录
 

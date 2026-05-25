@@ -49,7 +49,7 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 
 ### 2. Scheduler（调度器）
 
-**职责**：每秒轮询，为每个二维分片抢分布式锁，抢到后提交 Trigger 到协程池。
+**职责**：每秒轮询，为每个二维分片提交 worker；worker 抢到分布式锁后执行 Trigger。
 
 **二维分片**：由 `(time_range, bucket)` 组成的二维矩阵，同一时刻不同桶可并行处理，不同节点可认领不同分片。
 
@@ -57,13 +57,15 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 1. 计算当前分钟级时间范围 `time_range = YYYY-MM-DD-HH:mm`
 2. 同时处理当前分钟和上一分钟，避免边界任务遗漏
 3. 分别获取各分钟的动态分桶数（不同分钟可能不同）
-4. 对每个桶 `SETNX` 抢锁，TTL = `lock_expiration`（默认 70 秒，参考 xTimer `tryLockSeconds`，必须大于时间片时长 60 秒）
-5. 抢到锁 → 从 ants 协程池提交 Trigger 协程
+4. 对每个桶向 ants 协程池提交分片处理 worker
+5. worker 以 `processID_goroutineID` token 执行 `SET NX` 抢锁，TTL = `lock_expiration`（默认 70 秒）
+6. 抢到锁 → 在同一 worker 中运行 Trigger
 
 **锁策略（参考 xTimer）**：
 
 - 初始锁 TTL = `lock_expiration`（默认 70 秒），确保覆盖整个时间片（60 秒）且有余量
-- Trigger 每轮循环续期锁 TTL = `success_expiration`（默认 130 秒），防止空闲时锁过期导致并发重复执行
+- Trigger 成功扫描完整分片后将锁 TTL 设置为 `success_expiration`（默认 130 秒），覆盖上一分钟回扫窗口
+- 锁 value = `GetProcessAndGoroutineIDStr()`；续期与释放通过 Lua 校验当前 worker 仍持有该锁
 - 锁粒度：每个 `{time_range}:{bucket}` 一把锁
 - 多实例部署时，同一分片只会被一个实例处理
 - 动态分桶：当前分钟和上一分钟分别获取各自的 bucketNum，避免桶数不一致导致遗漏或越界
@@ -73,32 +75,32 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 **职责**：在时间片内持续轮询 Redis ZSet，读取到期任务提交 Executor。Redis 无结果时回退查询 MySQL（冷启动兜底）。
 
 **核心流程**：
-1. 计算时间片结束时间（`time_range` 对应分钟的 `:59`，如 `10:30` → `10:30:59`）
-2. 每轮循环续期锁 TTL = `success_expiration`（默认 130 秒），防止空闲时锁过期
-3. 循环调用 `GetDueTasks`（`ZRANGEBYSCORE` 读取到期任务，只读不删）
-4. 若 Redis 无结果，回退查询 MySQL 中 `status = PENDING` 的记录（冷启动兜底）
-5. 对每个到期任务，从协程池提交 Executor 协程
-6. 时间片结束后退出（见下方说明）
+1. 计算分钟半开区间 `[sliceStart, sliceEnd)`
+2. 以游标循环调用 `GetTasksByTime(cursor, dueEnd)`，每个扫描窗口互不重叠
+3. 若 Redis 无结果，回退查询同一扫描窗口中 `status = PENDING` 的 MySQL 记录
+4. 对每个到期任务，从协程池提交 Executor 协程
+5. 完整扫描分片后，通过 Lua 校验 owner token 并将锁 TTL 设置为 `success_expiration`
 
-**时间片结束**：每个 Trigger 负责处理一分钟内某个桶的任务，`10:30` 时间片的结束时间是 `10:30:59`。到达该时刻后，当前 Trigger 退出，由下一分钟的 Scheduler 轮询启动新的 Trigger。
+**时间片结束**：每个 Trigger 负责处理一分钟内某个桶的任务，`10:30` 时间片表示 `[10:30:00, 10:31:00)`。如果 Scheduler 在下一分钟补扫该分片，Trigger 会立即处理尚未完成的整个历史区间。
 
-**续期锁 TTL（参考 xTimer）**：Trigger 在每轮循环开始时续期锁的过期时间（`success_expiration`，默认 130 秒），防止锁在空闲轮询期间过期被其他节点抢占。初始锁 TTL 为 `lock_expiration`（默认 70 秒），覆盖整个时间片（60 秒）。
+**成功保留 TTL（参考 xTimer）**：初始锁 TTL 为 `lock_expiration`（默认 70 秒），覆盖 60 秒分片处理。分片扫描成功完成后，Trigger 将锁的剩余 TTL 重置为 `success_expiration`（默认 130 秒），避免当前/上一分钟扫描重入；这不表示 HTTP 回调全程持锁。
 
-**防重复机制**：任务保留在 ZSet 中，依赖分布式锁（`time_range + bucket` 维度）保证同一分片同一时刻只有一个节点处理。进程崩溃后任务仍在 ZSet 中，下次轮询可重新捞取。
+**防重复机制**：任务保留在 ZSet 中；非重叠读取窗口避免同一次 Trigger 重复派发。分布式锁降低多实例重复派发，数据库原子 `PENDING -> RUNNING` 抢占则保证重复派发不会重复执行回调。
 
 ### 4. Executor（执行器）
 
-**职责**：执行单个定时任务，包含两层幂等去重。
+**职责**：执行单个定时任务，Bloom Filter 加速重复任务过滤，数据库状态抢占保证执行权唯一。
 
 **核心流程**：
-1. **Bloom Filter 查重** → miss → 继续执行
-2. **Bloom 命中** → MySQL 查记录状态确认（`status != PENDING` 则跳过）
-3. 查询定时器定义（先内存缓存，miss 再 MySQL）
-4. 检查定时器状态（INACTIVE/DELETED 则跳过）
-5. 更新记录状态为 RUNNING
-6. 执行 HTTP 回调
-7. 根据结果更新状态（SUCCESS/FAILED）
-8. 执行成功 → Bloom Filter 打点
+1. 查询 Bloom Filter；命中时查询 MySQL 状态确认，已处理任务直接跳过
+2. 从 MySQL 实时检查定时器状态（INACTIVE/DELETED 则跳过）
+3. 查询创建后不可修改的定时器配置（先内存缓存，miss 再 MySQL）
+4. 以条件更新原子抢占 `PENDING -> RUNNING`；抢占失败直接跳过
+5. 执行 HTTP 回调
+6. 根据结果更新状态（SUCCESS/FAILED）
+7. 执行成功 → Bloom Filter 打点，为后续重复派发提供快速过滤
+
+**定时器定义约束**：定义创建后不可修改，仅允许激活、停用和删除；如需修改 Cron 或回调配置，删除原定义并新建定时器。停用或删除仅修改 MySQL 状态，不移除已经写入 Redis ZSet 的任务点。Executor 的可执行状态判断始终查询 MySQL，不读取节点本地定义缓存中的状态，避免多节点缓存滞后导致误执行。
 
 ## 数据模型
 
@@ -130,6 +132,8 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 | response_body | TEXT | 响应体 |
 | error_message | TEXT | 错误信息 |
 | duration | BIGINT | 执行耗时（毫秒） |
+
+唯一约束：`uk_timer_trigger_time(timer_id, trigger_time)`，从存储层阻止相同触发点重复建记录。
 
 ## 设计决策
 

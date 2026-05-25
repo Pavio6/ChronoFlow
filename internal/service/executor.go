@@ -23,13 +23,13 @@ import (
 
 // Executor 执行器
 // 被 Trigger 启动后，执行单个定时任务
-// 核心流程（两层幂等去重）：
-//  1. Bloom Filter 快速查重
-//  2. 若命中，查 MySQL 记录状态确认
-//  3. 查询定时器定义（先内存缓存，miss 再 MySQL）
-//  4. 执行 HTTP 回调
-//  5. 执行成功 → Bloom Filter 打点
-//  6. 更新 MySQL 执行记录状态
+// 核心流程：
+//  1. Bloom Filter 快速过滤已成功执行任务；命中后由 MySQL 确认
+//  2. 从 MySQL 校验定时器当前仍处于 ACTIVE 状态
+//  3. 查询不可变的定时器定义（先内存缓存，miss 再 MySQL）
+//  4. 原子抢占执行记录：只有 PENDING -> RUNNING 成功的执行器继续
+//  5. 执行 HTTP 回调
+//  6. 执行成功后写 Bloom Filter，并更新 MySQL 最终状态
 type Executor struct {
 	defRepo    repository.TimerDefinitionRepository
 	recRepo    repository.TimerRecordRepository
@@ -78,30 +78,25 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 		zap.Time("trigger_time", triggerTime),
 	)
 
-	// 第一层：Bloom Filter 快速查重
-	bloomKey := fmt.Sprintf("%s%s", redis.BloomPrefix, time.Now().Format("2006-01-02"))
+	bloomKey := fmt.Sprintf("%s%s", redis.BloomPrefix, triggerTime.Format("2006-01-02"))
 	bloomVal := fmt.Sprintf("%d:%d", timerID, triggerTime.UnixMilli())
+
+	// 参考 xTimer：Bloom Filter 命中时再由 MySQL 确认，避免误判造成漏执行。
 	mightExist, err := e.bloom.Exist(ctx, bloomKey, bloomVal)
 	if err != nil {
-		logger.Error("Executor Bloom Filter 查询失败",
+		logger.Warn("Executor Bloom Filter 查询失败，继续使用数据库抢占",
 			zap.Int64("timer_id", timerID),
 			zap.Error(err),
 		)
-		// Bloom Filter 故障时继续执行（宁可重复执行，不可漏执行）
-	}
-
-	if mightExist {
-		// 第二层：MySQL 查重确认
-		exists, err := e.recRepo.ExistsByTimerIDAndTriggerTime(timerID, triggerTime)
+	} else if mightExist {
+		started, err := e.recRepo.HasStartedByTimerIDAndTriggerTime(timerID, triggerTime)
 		if err != nil {
-			logger.Error("Executor MySQL 幂等检查失败",
+			logger.Warn("Executor Bloom 命中后的 MySQL 确认失败，继续使用数据库抢占",
 				zap.Int64("timer_id", timerID),
 				zap.Error(err),
 			)
-		}
-
-		if exists {
-			logger.Debug("Executor 任务已执行，跳过",
+		} else if started {
+			logger.Debug("Executor Bloom 命中且任务已处理，跳过",
 				zap.Int64("timer_id", timerID),
 				zap.Time("trigger_time", triggerTime),
 			)
@@ -109,7 +104,23 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 		}
 	}
 
-	// 查询定时器定义（先内存缓存，miss 再 MySQL）
+	// 状态是可变字段，必须读 MySQL；不能依赖可能滞后的节点本地定义缓存。
+	active, err := e.defRepo.IsActive(timerID)
+	if err != nil {
+		logger.Error("Executor 查询定时器状态失败",
+			zap.Int64("timer_id", timerID),
+			zap.Error(err),
+		)
+		return
+	}
+	if !active {
+		logger.Debug("Executor 定时器非激活状态，跳过",
+			zap.Int64("timer_id", timerID),
+		)
+		return
+	}
+
+	// 创建后配置不可修改，因此可安全复用配置缓存。
 	def := e.getTimerDefinition(ctx, timerID)
 	if def == nil {
 		logger.Warn("Executor 定时器定义不存在",
@@ -118,36 +129,24 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 		return
 	}
 
-	// 检查定时器状态，INACTIVE 或 DELETED 则跳过
-	if def.Status != model.TimerStatusActive {
-		logger.Debug("Executor 定时器非激活状态，跳过",
+	// 原子抢占执行权；重复派发或并发节点只能有一个成功执行回调。
+	now := time.Now()
+	record, claimed, err := e.recRepo.ClaimPendingByTimerIDAndTriggerTime(timerID, triggerTime, now)
+	if err != nil {
+		logger.Error("Executor 抢占执行记录失败",
 			zap.Int64("timer_id", timerID),
-			zap.String("status", string(def.Status)),
+			zap.Error(err),
+		)
+		return
+	}
+	if !claimed {
+		logger.Debug("Executor 任务已被领取或完成，跳过",
+			zap.Int64("timer_id", timerID),
+			zap.Time("trigger_time", triggerTime),
 		)
 		return
 	}
 	e.reporter.ReportTrigger(def.App)
-
-	// 查找对应的执行记录
-	record, err := e.findOrCreateRecord(ctx, timerID, triggerTime, def)
-	if err != nil {
-		logger.Error("Executor 查找/创建执行记录失败",
-			zap.Int64("timer_id", timerID),
-			zap.Error(err),
-		)
-		return
-	}
-
-	// 更新记录状态为 RUNNING
-	now := time.Now()
-	record.Status = model.RecordStatusRunning
-	record.StartedAt = &now
-	if err := e.recRepo.Update(record); err != nil {
-		logger.Error("Executor 更新记录状态为 RUNNING 失败",
-			zap.Int64("record_id", record.ID),
-			zap.Error(err),
-		)
-	}
 
 	// 执行 HTTP 回调
 	responseCode, responseBody, err := e.executeHTTPCallback(def, record)
@@ -220,7 +219,7 @@ func isTimeoutError(err error) bool {
 	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
-// getTimerDefinition 获取定时器定义（先内存缓存，miss 再 MySQL）
+// getTimerDefinition 获取创建后不可变的执行配置（状态判断不使用该缓存）。
 func (e *Executor) getTimerDefinition(ctx context.Context, timerID int64) *model.TimerDefinition {
 	// 先查内存缓存
 	if def, ok := e.cache.Get(timerID); ok {
@@ -245,38 +244,6 @@ func (e *Executor) getTimerDefinition(ctx context.Context, timerID int64) *model
 	e.cache.Set(timerID, def, 5*time.Minute)
 
 	return def
-}
-
-// findOrCreateRecord 查找或创建执行记录
-func (e *Executor) findOrCreateRecord(ctx context.Context, timerID int64, triggerTime time.Time, def *model.TimerDefinition) (*model.TimerRecord, error) {
-	// 先尝试查找已存在的 PENDING 记录
-	records, err := e.recRepo.GetByTimerID(timerID, 10)
-	if err != nil {
-		return nil, fmt.Errorf("查询执行记录失败: %w", err)
-	}
-
-	// 查找匹配的 PENDING 记录
-	for _, r := range records {
-		if r.TriggerTime.Equal(triggerTime) && r.Status == model.RecordStatusPending {
-			return r, nil
-		}
-	}
-
-	// 未找到，创建新记录
-	record := &model.TimerRecord{
-		TimerID:       timerID,
-		TriggerTime:   triggerTime,
-		Status:        model.RecordStatusPending,
-		RequestURL:    def.CallbackURL,
-		RequestMethod: def.CallbackMethod,
-		RequestBody:   def.CallbackBody,
-	}
-
-	if err := e.recRepo.Create(record); err != nil {
-		return nil, fmt.Errorf("创建执行记录失败: %w", err)
-	}
-
-	return record, nil
 }
 
 // executeHTTPCallback 执行 HTTP 回调

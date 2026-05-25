@@ -89,7 +89,7 @@ func main() {
 	logger.Info("协程池创建成功", zap.Int("size", cfg.Executor.WorkerPoolSize))
 
 	// ========== 8. 初始化服务层 ==========
-	// 执行器（被 Trigger 调用，两层幂等：Bloom Filter + MySQL）
+	// 执行器（Bloom 快速过滤，MySQL 条件状态更新授予唯一执行权）
 	executor := service.NewExecutor(
 		defRepo, recRepo, bloomFilter, timerCache,
 		reporter, &cfg.Executor,

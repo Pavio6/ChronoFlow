@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState } from 'react';
 import {
   Form,
   Input,
@@ -11,10 +11,10 @@ import {
   Row,
   Col,
 } from 'antd';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import type { CreateTimerRequest, UpdateTimerRequest } from '../types';
-import { createTimer, getTimer, updateTimer } from '../api/tasks';
+import type { CreateTimerRequest } from '../types';
+import { createTimer } from '../api/tasks';
 import { HTTP_METHODS, CRON_PRESETS, APP_PRESETS } from '../utils/constants';
 
 const { TextArea } = Input;
@@ -33,35 +33,8 @@ interface FormValues {
 
 const TaskForm: React.FC = () => {
   const navigate = useNavigate();
-  const { id } = useParams<{ id: string }>();
   const [form] = Form.useForm();
   const [loading, setLoading] = useState(false);
-  const isEdit = !!id;
-
-  const loadTimer = useCallback(async () => {
-    try {
-      const res = await getTimer(Number(id));
-      if (res.data) {
-        const t = res.data;
-        let headers = {};
-        try { headers = JSON.parse(t.callback_headers || '{}'); } catch { /* */ }
-        form.setFieldsValue({
-          app: t.app, name: t.name, cron_expr: t.cron_expr,
-          callback_url: t.callback_url, callback_method: t.callback_method,
-          callback_body: t.callback_body,
-          callback_headers: JSON.stringify(headers, null, 2),
-          timeout: t.timeout,
-        });
-      }
-    } catch (error: unknown) {
-      message.error((error as Error).message || '加载失败');
-      navigate('/tasks');
-    }
-  }, [id, form, navigate]);
-
-  useEffect(() => {
-    if (isEdit) loadTimer();
-  }, [isEdit, loadTimer]);
 
   const handleSubmit = async (values: FormValues) => {
     setLoading(true);
@@ -77,13 +50,8 @@ const TaskForm: React.FC = () => {
         }
       }
       const data = { ...values, callback_headers: headers };
-      if (isEdit) {
-        await updateTimer(Number(id), data as UpdateTimerRequest);
-        message.success('更新成功');
-      } else {
-        await createTimer(data as CreateTimerRequest);
-        message.success('创建成功');
-      }
+      await createTimer(data as CreateTimerRequest);
+      message.success('创建成功');
       navigate('/tasks');
     } catch (error: unknown) {
       message.error((error as Error).message || '操作失败');
@@ -197,7 +165,7 @@ const TaskForm: React.FC = () => {
           <Form.Item className="form-actions">
             <Space>
               <Button type="primary" htmlType="submit" loading={loading}>
-                {isEdit ? '更新' : '创建'}
+                创建
               </Button>
               <Button onClick={() => navigate('/tasks')}>取消</Button>
             </Space>

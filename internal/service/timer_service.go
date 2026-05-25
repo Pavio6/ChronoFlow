@@ -16,7 +16,7 @@ import (
 )
 
 // TimerService 定时器业务逻辑层
-// 封装定时器定义的 CRUD 操作和状态管理
+// 封装不可变定时器定义的创建、读取和状态管理
 type TimerService struct {
 	defRepo  repository.TimerDefinitionRepository
 	recRepo  repository.TimerRecordRepository
@@ -89,56 +89,6 @@ func (s *TimerService) GetByID(id int64) (*model.TimerDefinition, error) {
 	if def == nil {
 		return nil, fmt.Errorf("定时器不存在，id=%d", id)
 	}
-	return def, nil
-}
-
-// Update 更新定时器定义
-// 使用指针字段实现部分更新
-func (s *TimerService) Update(id int64, req *model.UpdateTimerDefinitionRequest) (*model.TimerDefinition, error) {
-	// 查询现有定义
-	def, err := s.defRepo.GetByID(id)
-	if err != nil {
-		return nil, fmt.Errorf("查询定时器失败: %w", err)
-	}
-	if def == nil {
-		return nil, fmt.Errorf("定时器不存在，id=%d", id)
-	}
-
-	// 部分更新
-	if req.Name != nil {
-		def.Name = *req.Name
-	}
-	if req.CronExpr != nil {
-		// 验证新的 Cron 表达式
-		if err := s.parser.ValidateCronExpr(*req.CronExpr); err != nil {
-			return nil, fmt.Errorf("无效的 Cron 表达式: %w", err)
-		}
-		def.CronExpr = *req.CronExpr
-	}
-	if req.CallbackURL != nil {
-		def.CallbackURL = *req.CallbackURL
-	}
-	if req.CallbackMethod != nil {
-		def.CallbackMethod = *req.CallbackMethod
-	}
-	if req.CallbackBody != nil {
-		def.CallbackBody = *req.CallbackBody
-	}
-	if req.CallbackHeaders != nil {
-		b, err := json.Marshal(*req.CallbackHeaders)
-		if err != nil {
-			return nil, fmt.Errorf("序列化回调头失败: %w", err)
-		}
-		def.CallbackHeaders = string(b)
-	}
-	if req.Timeout != nil {
-		def.Timeout = *req.Timeout
-	}
-
-	if err := s.defRepo.Update(def); err != nil {
-		return nil, fmt.Errorf("更新定时器失败: %w", err)
-	}
-
 	return def, nil
 }
 

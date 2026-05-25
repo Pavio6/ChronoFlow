@@ -2,7 +2,6 @@ import apiClient from './client';
 import type {
   TimerDefinition,
   CreateTimerRequest,
-  UpdateTimerRequest,
   TimerListResponse,
   TimerListParams,
   ApiResponse,
@@ -22,11 +21,6 @@ export const getTimer = async (id: number): Promise<ApiResponse<TimerDefinition>
 // 创建定时器
 export const createTimer = async (data: CreateTimerRequest): Promise<ApiResponse<TimerDefinition>> => {
   return apiClient.post('/timers', data);
-};
-
-// 更新定时器
-export const updateTimer = async (id: number, data: UpdateTimerRequest): Promise<ApiResponse<TimerDefinition>> => {
-  return apiClient.put(`/timers/${id}`, data);
 };
 
 // 删除定时器

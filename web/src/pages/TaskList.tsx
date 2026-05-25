@@ -16,7 +16,6 @@ import {
   SearchOutlined,
   PlayCircleOutlined,
   PauseCircleOutlined,
-  EditOutlined,
   DeleteOutlined,
   ReloadOutlined,
 } from '@ant-design/icons';
@@ -106,10 +105,6 @@ const TaskList: React.FC = () => {
                 onClick={() => handleAction(() => activateTimer(record.id), '激活成功')} />
             </Tooltip>
           ) : null}
-          <Tooltip title="编辑">
-            <Button className="icon-button" type="text" size="small" icon={<EditOutlined />}
-              onClick={() => navigate(`/tasks/edit/${record.id}`)} />
-          </Tooltip>
           <Popconfirm title="确定删除？" onConfirm={() => handleAction(() => deleteTimer(record.id), '删除成功')}>
             <Tooltip title="删除">
               <Button className="icon-button" type="text" size="small" danger icon={<DeleteOutlined />} />
