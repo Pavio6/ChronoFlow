@@ -88,23 +88,23 @@ func (s *Scheduler) schedule(ctx context.Context) {
 	prevTimeRange := formatTimeRange(now.Add(-time.Minute))
 
 	// 从 Redis 获取当前分钟的动态分桶数
-	currentBucketNum, err := s.queue.GetBucketNum(ctx, currentTimeRange, s.cfg.BucketNum)
+	currentBucketNum, err := s.queue.GetBucketNum(ctx, currentTimeRange, s.cfg.BaseBucketNum)
 	if err != nil {
 		logger.Error("Scheduler 获取当前分钟动态分桶数失败，使用默认值",
 			zap.String("time_range", currentTimeRange),
 			zap.Error(err),
 		)
-		currentBucketNum = s.cfg.BucketNum
+		currentBucketNum = s.cfg.BaseBucketNum
 	}
 
 	// 从 Redis 获取上一分钟的动态分桶数（可能与当前分钟不同）
-	prevBucketNum, err := s.queue.GetBucketNum(ctx, prevTimeRange, s.cfg.BucketNum)
+	prevBucketNum, err := s.queue.GetBucketNum(ctx, prevTimeRange, s.cfg.BaseBucketNum)
 	if err != nil {
 		logger.Error("Scheduler 获取上一分钟动态分桶数失败，使用默认值",
 			zap.String("time_range", prevTimeRange),
 			zap.Error(err),
 		)
-		prevBucketNum = s.cfg.BucketNum
+		prevBucketNum = s.cfg.BaseBucketNum
 	}
 
 	// 锁的初始 TTL，参考 xTimer tryLockSeconds（必须大于时间片时长 60 秒）

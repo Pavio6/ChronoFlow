@@ -148,14 +148,14 @@ for bucket := 0; bucket < prevBucketNum; bucket++ {
     })
 }
 
-// Trigger：非重叠窗口轮询 + DB 回退 + 提交 Executor + 成功保留锁
+// Trigger：非重叠窗口轮询 + DB 部分投递补偿 + 提交 Executor + 成功保留锁
 successExpiration := time.Duration(cfg.SuccessExpiration) * time.Second // 默认 130s，参考 xTimer successExpireSeconds
 cursor := sliceStart
 for cursor.Before(sliceEnd) {
     dueEnd := min(nextWholeSecond(time.Now()), sliceEnd)
     if !cursor.Before(dueEnd) { continue }
     triggers, _ := queue.GetTasksByTime(ctx, timeRange, bucket, cursor, dueEnd)
-    // Redis 无结果时回退查询 MySQL（冷启动兜底）
+    // 每个窗口合并已有 MySQL PENDING 记录（Redis 部分失败兜底）
     if len(triggers) == 0 {
         triggers, _ = recRepo.GetPendingByTimeRange(cursor, dueEnd)
         // 按 bucket 过滤: timer_id % bucketNum == bucket

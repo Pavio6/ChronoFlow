@@ -33,7 +33,7 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 
 **职责**：将 MySQL 中的定时器定义批量预创建为执行记录，并推送到 Redis ZSet 队列。
 
-**触发时机**：每隔 `migrate_step_minutes`（默认 60 分钟）执行一次。启动时不立即执行，等第一次 ticker 触发；冷启动期间的任务由 Trigger 的 DB 回退机制兜底。
+**触发时机**：每隔 `migrate_step_minutes`（默认 60 分钟）执行一次。启动时不立即执行，等第一次 ticker 触发。
 
 **核心流程**：
 1. 全量扫描 `timer_definitions` 表中 `status = ACTIVE` 的记录
@@ -100,12 +100,12 @@ Scheduler 每次轮询都会为有任务的分片提交 worker 尝试抢锁，�
 
 ### 3. Trigger（触发器）
 
-**职责**：在时间片内持续轮询 Redis ZSet，读取到期任务提交 Executor。Redis 无结果时回退查询 MySQL（冷启动兜底）。
+**职责**：在时间片内持续轮询 Redis ZSet，读取到期任务提交 Executor。每个扫描窗口同时合并已经存在的 MySQL PENDING 记录，覆盖 Redis 部分投递失败。
 
 **核心流程**：
 1. 计算分钟半开区间 `[sliceStart, sliceEnd)`
 2. 以游标循环调用 `GetTasksByTime(cursor, dueEnd)`，每个扫描窗口互不重叠
-3. 若 Redis 无结果，回退查询同一扫描窗口中 `status = PENDING` 的 MySQL 记录
+3. 查询同一扫描窗口中 `status = PENDING` 的 MySQL 记录，并与 Redis 结果按触发点去重合并
 4. 对每个到期任务，从协程池提交 Executor 协程
 5. 完整扫描分片后，通过 Lua 校验 owner token 并将锁 TTL 设置为 `success_expiration`
 
@@ -145,7 +145,6 @@ Scheduler 每次轮询都会为有任务的分片提交 worker 尝试抢锁，�
 | callback_body | TEXT | 请求体 |
 | callback_headers | TEXT | 请求头 JSON |
 | status | VARCHAR(32) | ACTIVE/INACTIVE/DELETED |
-| timeout | INT | 超时秒数 |
 
 ### timer_records（执行记录）
 
@@ -154,7 +153,7 @@ Scheduler 每次轮询都会为有任务的分片提交 worker 尝试抢锁，�
 | id | BIGINT PK | 记录 ID |
 | timer_id | BIGINT FK | 定时器 ID |
 | trigger_time | DATETIME | 计划触发时间 |
-| status | VARCHAR(32) | PENDING/RUNNING/SUCCESS/FAILED/TIMEOUT |
+| status | VARCHAR(32) | PENDING/RUNNING/SUCCESS/FAILED |
 | request_url | VARCHAR(512) | 实际请求 URL |
 | response_code | INT | HTTP 响应码 |
 | response_body | TEXT | 响应体 |

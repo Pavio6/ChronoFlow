@@ -4,7 +4,6 @@ import {
   Input,
   Select,
   Button,
-  InputNumber,
   Space,
   message,
   Typography,
@@ -28,7 +27,6 @@ interface FormValues {
   callback_method: string;
   callback_body?: string;
   callback_headers?: string;
-  timeout: number;
 }
 
 const TaskForm: React.FC = () => {
@@ -76,7 +74,7 @@ const TaskForm: React.FC = () => {
           form={form}
           layout="vertical"
           onFinish={handleSubmit}
-          initialValues={{ app: 'default', callback_method: 'POST', timeout: 30 }}
+          initialValues={{ app: 'default', callback_method: 'POST' }}
           className="task-form"
         >
           <div className="form-section-heading">
@@ -148,19 +146,6 @@ const TaskForm: React.FC = () => {
           <Form.Item name="callback_headers" label="请求头 (JSON)">
             <TextArea placeholder='{"Authorization": "Bearer xxx"}' rows={2} style={{ fontFamily: 'monospace' }} />
           </Form.Item>
-
-          <div className="form-section-heading">
-            <h2>执行配置</h2>
-            <p>控制回调请求的超时时间。</p>
-          </div>
-
-          <Row gutter={16}>
-            <Col xs={24} md={12}>
-              <Form.Item name="timeout" label="超时 (秒)" rules={[{ required: true }]}>
-                <InputNumber min={1} max={300} style={{ width: '100%' }} />
-              </Form.Item>
-            </Col>
-          </Row>
 
           <Form.Item className="form-actions">
             <Space>

@@ -14,8 +14,6 @@ const (
 	RecordStatusSuccess RecordStatus = "SUCCESS"
 	// RecordStatusFailed 执行失败
 	RecordStatusFailed RecordStatus = "FAILED"
-	// RecordStatusTimeout 执行超时
-	RecordStatusTimeout RecordStatus = "TIMEOUT"
 )
 
 // TimerRecord 定时器执行记录
@@ -42,11 +40,10 @@ func (TimerRecord) TableName() string {
 	return "timer_records"
 }
 
-// IsCompleted 判断记录是否已完成（成功、失败或超时）
+// IsCompleted 判断记录是否已完成（成功或失败）
 func (r *TimerRecord) IsCompleted() bool {
 	return r.Status == RecordStatusSuccess ||
-		r.Status == RecordStatusFailed ||
-		r.Status == RecordStatusTimeout
+		r.Status == RecordStatusFailed
 }
 
 // RecordListRequest 执行记录列表查询请求

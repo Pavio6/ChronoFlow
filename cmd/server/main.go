@@ -93,11 +93,10 @@ func main() {
 	// 执行器（Bloom 快速过滤，MySQL 条件状态更新授予唯一执行权）
 	executor := service.NewExecutor(
 		defRepo, recRepo, bloomFilter, timerCache,
-		reporter, &cfg.Executor,
-		timerCacheTTL,
+		reporter, timerCacheTTL,
 	)
 
-	// 触发器（被 Scheduler 调用，DB 回退需要 recRepo）
+	// 触发器（被 Scheduler 调用，DB 部分投递补偿需要 recRepo）
 	trigger := service.NewTrigger(queue, workerPool, executor, recRepo, &cfg.Scheduler)
 
 	// 调度器
@@ -108,9 +107,6 @@ func main() {
 
 	// 定时器 CRUD 服务
 	timerService := service.NewTimerService(defRepo, recRepo, cronParser, queue, &cfg.Scheduler)
-
-	// 超时恢复服务
-	timeoutMonitor := service.NewTimeoutMonitor(recRepo, &cfg.Executor)
 
 	// ========== 9. 启动后台服务 ==========
 	ctx, cancel := context.WithCancel(context.Background())
@@ -124,9 +120,6 @@ func main() {
 
 	// 启动调度器（轮询 + 分发）
 	go scheduler.Start(ctx)
-
-	// 启动超时恢复服务（处理异常遗留的 RUNNING 记录）
-	go timeoutMonitor.Start(ctx)
 
 	logger.Info("后台服务已启动",
 		zap.Int("migrate_step_minutes", cfg.Scheduler.MigrateStepMinutes),
@@ -190,7 +183,6 @@ func main() {
 	// 停止后台服务
 	migrator.Stop()
 	scheduler.Stop()
-	timeoutMonitor.Stop()
 	cancel()
 
 	// 关闭 HTTP 服务器（等待 5 秒处理完当前请求）

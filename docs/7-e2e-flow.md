@@ -66,6 +66,8 @@ TimerService.Activate()
     ↓
 状态机验证
     ↓
+MySQL UPDATE status = 'ACTIVE'
+    ↓
 计算时间窗口：now ~ now + migrate_step_minutes*2
     ↓
 解析 Cron 表达式，计算触发时间点
@@ -73,8 +75,6 @@ TimerService.Activate()
 幂等检查 + 创建 MySQL 记录（status = PENDING）
     ↓
 按 {time_range}:{bucket} 分组，批量推送到 Redis
-    ↓
-MySQL UPDATE status = 'ACTIVE'
 ```
 
 ### 状态变化
@@ -98,7 +98,7 @@ var timerTransitions = map[TimerStatus][]TimerStatus{
 
 ### 触发时机
 
-- 等待第一次 ticker 触发（启动时不立即执行，冷启动任务由 Trigger DB 回退兜底）
+- 等待第一次 ticker 触发（启动时不立即执行）
 - 之后每隔 `migrate_step_minutes`（默认 60 分钟）执行一次
 
 ### 数据流
@@ -189,7 +189,7 @@ Trigger.Run()
     ↓
     ZRANGEBYSCORE 获取 `[cursor, dueEnd)` 的任务（只读不删，窗口不重叠）
     ↓
-    Redis 无结果 → 回退查询 MySQL（冷启动兜底）
+    合并已有 MySQL PENDING 记录（Redis 部分失败兜底）
     ↓
     提交 Executor 到协程池，并推进 cursor
     ↓
@@ -211,10 +211,9 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
 
         triggers, _ := t.queue.GetTasksByTime(ctx, timeRange, bucket, cursor, dueEnd)
         
-        // Redis 无结果时回退查询 MySQL（冷启动兜底）
-        if len(triggers) == 0 {
-            triggers, _ = t.getDueTasksFromDB(ctx, timeRange, bucket, bucketNum, cursor, dueEnd)
-        }
+        // 合并已有 MySQL PENDING 记录，覆盖 Redis 部分写入失败
+        dbTriggers, _ := t.getDueTasksFromDB(ctx, timeRange, bucket, bucketNum, cursor, dueEnd)
+        triggers = mergeTaskTriggers(triggers, dbTriggers)
         
         for _, trigger := range triggers {
             t.pool.Submit(func() {
@@ -277,7 +276,6 @@ Bloom Filter 在成功后写入，并在后续派发前快速查询；命中必�
 ```
 PENDING → RUNNING → SUCCESS（执行成功）
                   → FAILED（执行失败）
-                  → TIMEOUT（执行超时）
 ```
 
 ### 记录状态流转图
@@ -291,11 +289,11 @@ PENDING → RUNNING → SUCCESS（执行成功）
                     │ RUNNING │
                     └────┬────┘
                          ↓
-        ┌────────────────┼────────────────┐
-        ↓                ↓                ↓
-   ┌─────────┐     ┌─────────┐     ┌─────────┐
-   │ SUCCESS │     │ FAILED  │     │ TIMEOUT │
-   └─────────┘     └─────────┘     └─────────┘
+        ┌────────────────┴────────────────┐
+        ↓                                 ↓
+   ┌─────────┐                      ┌─────────┐
+   │ SUCCESS │                      │ FAILED  │
+   └─────────┘                      └─────────┘
 ```
 
 ## 7. 完成后处理

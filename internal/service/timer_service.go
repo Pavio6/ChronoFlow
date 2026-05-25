@@ -70,7 +70,6 @@ func (s *TimerService) Create(req *model.CreateTimerDefinitionRequest) (*model.T
 		CallbackBody:    req.CallbackBody,
 		CallbackHeaders: headersJSON,
 		Status:          model.TimerStatusInactive,
-		Timeout:         req.Timeout,
 	}
 
 	if err := s.defRepo.Create(def); err != nil {
@@ -140,6 +139,11 @@ func (s *TimerService) Activate(id int64) error {
 		return fmt.Errorf("无法激活定时器: %w", err)
 	}
 
+	// 先发布 ACTIVE 状态，再让任何 PENDING 记录或 Redis 触发点对调度器可见。
+	if err := s.defRepo.UpdateStatus(id, model.TimerStatusActive); err != nil {
+		return fmt.Errorf("更新定时器激活状态失败: %w", err)
+	}
+
 	// 计算时间窗口：now ~ now + migrate_step_minutes*2（取整到小时）
 	now := time.Now()
 	endTime := now.Add(time.Duration(s.schedCfg.MigrateStepMinutes*2) * time.Minute)
@@ -151,34 +155,10 @@ func (s *TimerService) Activate(id int64) error {
 		return fmt.Errorf("解析 Cron 表达式失败: %w", err)
 	}
 
-	// 按时间步统计任务数量，用于动态分桶
-	taskCountByTimeRange := make(map[string]int)
+	// 只将本次真正创建成功的任务注册到分钟级动态分桶中。
+	triggersByMinute := make(map[string][]*redis.TaskTrigger)
 	for _, triggerTime := range triggerTimes {
 		timeRange := triggerTime.Format("2006-01-02-15:04")
-		taskCountByTimeRange[timeRange]++
-	}
-
-	// 计算每个时间步的动态分桶数并存储到 Redis
-	bucketNumByTimeRange := make(map[string]int)
-	lockExpiration := time.Duration(s.schedCfg.MigrateStepMinutes*2) * time.Minute
-	for timeRange, count := range taskCountByTimeRange {
-		bucketNum := calculateBucketNum(count, s.schedCfg.BucketNum)
-		bucketNumByTimeRange[timeRange] = bucketNum
-		if err := s.queue.SetBucketNum(context.Background(), timeRange, bucketNum, lockExpiration); err != nil {
-			logger.Error("激活时存储分桶映射失败",
-				zap.String("time_range", timeRange),
-				zap.Int("bucket_num", bucketNum),
-				zap.Error(err),
-			)
-		}
-	}
-
-	// 按分桶收集待推送的触发信息
-	// key 格式: {time_range}:{bucket}
-	bucketTriggers := make(map[string][]*redis.TaskTrigger)
-	for _, triggerTime := range triggerTimes {
-		timeRange := triggerTime.Format("2006-01-02-15:04")
-		bucketNum := bucketNumByTimeRange[timeRange]
 
 		// 幂等性检查：避免重复创建记录
 		exists, err := s.recRepo.ExistsByTimerIDAndTriggerTime(def.ID, triggerTime)
@@ -212,38 +192,18 @@ func (s *TimerService) Activate(id int64) error {
 			continue
 		}
 
-		// 计算分桶号（使用动态分桶）
-		bucket := int(def.ID) % bucketNum
-		key := fmt.Sprintf("%s:%d", timeRange, bucket)
-		bucketTriggers[key] = append(bucketTriggers[key], &redis.TaskTrigger{
+		triggersByMinute[timeRange] = append(triggersByMinute[timeRange], &redis.TaskTrigger{
 			TimerID:     def.ID,
 			TriggerTime: triggerTime,
 		})
 	}
 
-	// 批量推送到 Redis
-	for key, triggers := range bucketTriggers {
-		var timeRange string
-		var bucket int
-		if _, err := fmt.Sscanf(key, "%s:%d", &timeRange, &bucket); err != nil {
-			logger.Error("激活时解析队列 key 失败",
-				zap.String("key", key),
-				zap.Error(err),
-			)
-			continue
-		}
-		if err := s.queue.BatchPushTasks(context.Background(), timeRange, bucket, triggers); err != nil {
-			logger.Error("激活时批量推送任务到 Redis 失败",
-				zap.String("key", key),
-				zap.Int("count", len(triggers)),
-				zap.Error(err),
-			)
-			return fmt.Errorf("同步任务到 Redis 失败: %w", err)
-		}
+	if err := pushMinuteTriggers(context.Background(), s.queue, s.schedCfg, triggersByMinute); err != nil {
+		logger.Error("激活时同步任务到 Redis 失败", zap.Int64("timer_id", def.ID), zap.Error(err))
+		return fmt.Errorf("同步任务到 Redis 失败: %w", err)
 	}
 
-	// 更新状态为 ACTIVE
-	return s.defRepo.UpdateStatus(id, model.TimerStatusActive)
+	return nil
 }
 
 // Deactivate 停用定时器
@@ -300,19 +260,4 @@ func (s *TimerService) ListRecords(req *model.RecordListRequest) (*model.RecordL
 		PageSize: req.PageSize,
 		Items:    items,
 	}, nil
-}
-
-// calculateBucketNum 根据任务数量计算分桶数
-// 规则：bucket_num = min(max(task_count / 100, 1), max_bucket)
-func calculateBucketNum(taskCount int, maxBucket int) int {
-	// 每 100 个任务一个桶，最少 1 个桶
-	bucketNum := taskCount / 100
-	if bucketNum < 1 {
-		bucketNum = 1
-	}
-	// 不超过最大桶数
-	if bucketNum > maxBucket {
-		bucketNum = maxBucket
-	}
-	return bucketNum
 }

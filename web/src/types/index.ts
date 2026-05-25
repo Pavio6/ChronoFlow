@@ -9,8 +9,7 @@ export type RecordStatus =
   | 'PENDING'   // 等待执行
   | 'RUNNING'   // 执行中
   | 'SUCCESS'   // 执行成功
-  | 'FAILED'    // 执行失败
-  | 'TIMEOUT';  // 执行超时
+  | 'FAILED';   // 执行失败
 
 // 定时器定义接口
 export interface TimerDefinition {
@@ -23,7 +22,6 @@ export interface TimerDefinition {
   callback_body: string;
   callback_headers: string;
   status: TimerStatus;
-  timeout: number;
   created_at: string;
   updated_at: string;
 }
@@ -37,7 +35,6 @@ export interface CreateTimerRequest {
   callback_method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   callback_body?: string;
   callback_headers?: Record<string, string>;
-  timeout?: number;
 }
 
 // 定时器列表响应
@@ -112,7 +109,6 @@ export interface MonitoringSummary {
     running: number;
     success: number;
     failed: number;
-    timeout: number;
   };
   redis: {
     queue_keys: number;

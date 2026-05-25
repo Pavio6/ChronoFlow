@@ -83,10 +83,8 @@ graph TD
     
     J --> K["在时间片内轮询 Redis ZSet<br/>{time_range}:{bucket}"]
     K --> L["按不重叠时间窗口 ZRANGEBYSCORE<br/>取到期任务"]
-    L --> L2{"Redis 有结果?"}
-    L2 -->|否| L3["回退查询 MySQL（冷启动兜底）"]
-    L3 --> M
-    L2 -->|是| M["从协程池提交 Executor"]
+    L --> L2["合并已有 MySQL PENDING 记录<br/>(Redis 部分投递补偿)"]
+    L2 --> M["从协程池提交 Executor"]
     
     M --> N["Bloom Filter 快速查询"]
     N --> N2{"命中且 MySQL<br/>确认已处理?"}
@@ -224,7 +222,7 @@ go run tests/callback-server/main.go
 | 接口 | 说明 |
 |------|------|
 | `POST /callback/success` | 立即返回成功 |
-| `POST /callback/slow` | 延迟 10 秒后返回（测试超时） |
+| `POST /callback/slow` | 延迟 10 秒后返回 |
 | `POST /callback/error` | 返回 500 错误 |
 | `GET /stats` | 查看调用统计 |
 
@@ -240,8 +238,7 @@ curl -X POST http://localhost:8080/api/v1/timers \
     "cron_expr": "*/30 * * * * *",
     "callback_url": "http://localhost:9090/callback/success",
     "callback_method": "POST",
-    "callback_body": "{\"msg\": \"hello\"}",
-    "timeout": 10
+    "callback_body": "{\"msg\": \"hello\"}"
   }'
 ```
 
@@ -286,10 +283,10 @@ curl http://localhost:8080/api/v1/timers/1/records
 curl http://localhost:9090/stats
 ```
 
-### 步骤五：测试超时
+### 步骤五：测试慢回调
 
 ```bash
-# 创建一个指向慢接口的定时器（超时设为 5 秒，但接口需要 10 秒）
+# 创建一个指向慢接口的定时器
 curl -X POST http://localhost:8080/api/v1/timers \
   -H "Content-Type: application/json" \
   -d '{
@@ -297,8 +294,7 @@ curl -X POST http://localhost:8080/api/v1/timers \
     "name": "测试超时",
     "cron_expr": "*/30 * * * * *",
     "callback_url": "http://localhost:9090/callback/slow",
-    "callback_method": "POST",
-    "timeout": 5
+    "callback_method": "POST"
   }'
 ```
 
@@ -330,11 +326,13 @@ PORT=8081 go run cmd/server/main.go
 |--------|--------|------|
 | `scheduler.migrate_step_minutes` | 60 | Migrator 执行间隔（分钟） |
 | `scheduler.step2_duration` | 120 | 二级迁移时间步（秒），本地定义及状态缓存有效期（2 分钟） |
-| `scheduler.bucket_num` | 3 | 分桶数量 |
+| `scheduler.base_bucket_num` | 1 | 单分钟基础桶数 |
+| `scheduler.bucket_num` | 3 | 单分钟动态扩桶上限 |
+| `scheduler.tasks_per_bucket` | 100 | 每桶目标投递任务数 |
+| `scheduler.bucket_metadata_ttl` | 600 | 时间片结束后队列与分桶元数据保留秒数 |
 | `scheduler.scan_interval` | 1 | Scheduler 轮询间隔（秒） |
 | `scheduler.lock_expiration` | 70 | 分片锁初始 TTL（秒） |
 | `scheduler.success_expiration` | 130 | 分片扫描成功后的锁保留 TTL（秒） |
-| `executor.timeout` | 30 | HTTP 回调超时（秒） |
 | `executor.worker_pool_size` | 100 | 协程池大小 |
 
 ## Redis Key 结构
@@ -342,6 +340,8 @@ PORT=8081 go run cmd/server/main.go
 | 用途 | Key 格式 | 类型 |
 |------|----------|------|
 | 任务队列 | `chronoflow:timer:{YYYY-MM-DD-HH:mm}:{bucket}` | ZSet |
+| 分桶数量 | `chronoflow:bucket:{YYYY-MM-DD-HH:mm}` | String |
+| 投递计数 | `chronoflow:task_count:{YYYY-MM-DD-HH:mm}` | String |
 | Scheduler 锁 | `chronoflow:scheduler_lock:{time_range}:{bucket}` | String (owner token, SET NX TTL) |
 | 布隆过滤器 | `chronoflow:bloom:{date}` | String (bitmap) |
 

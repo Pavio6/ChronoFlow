@@ -23,8 +23,14 @@ scheduler:
   migrate_step_minutes: 60
   # 二级时间步（秒），本地定时器定义及状态缓存有效期，默认 2 分钟
   step2_duration: 120
-  # 分桶数量（支持动态调整）
+  # 每分钟初始扫描桶数
+  base_bucket_num: 1
+  # 动态分桶允许扩展到的最大桶数
   bucket_num: 3
+  # 每个桶承载的目标投递任务数；累计任务量超过容量时只增不减地扩桶
+  tasks_per_bucket: 100
+  # 时间片结束后，Redis 队列及分桶元数据继续保留的秒数
+  bucket_metadata_ttl: 600
   # Scheduler 轮询间隔（秒）
   scan_interval: 1
   # 分布式锁初始 TTL（秒），必须大于时间片时长（60 秒），参考 xTimer tryLockSeconds
@@ -33,8 +39,6 @@ scheduler:
   success_expiration: 130
 
 executor:
-  # HTTP 回调超时（秒）
-  timeout: 30
   # 协程池大小
   worker_pool_size: 100
 

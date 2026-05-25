@@ -25,7 +25,6 @@ type TimerDefinition struct {
 	CallbackBody    string      `gorm:"type:text;comment:回调请求体" json:"callback_body"`
 	CallbackHeaders string      `gorm:"type:text;comment:回调请求头(JSON)" json:"callback_headers"`
 	Status          TimerStatus `gorm:"size:32;not null;default:INACTIVE;comment:状态" json:"status"`
-	Timeout         int         `gorm:"default:30;comment:超时时间(秒)" json:"timeout"`
 	CreatedAt       time.Time   `gorm:"autoCreateTime" json:"created_at"`
 	UpdatedAt       time.Time   `gorm:"autoUpdateTime" json:"updated_at"`
 }
@@ -44,7 +43,6 @@ type CreateTimerDefinitionRequest struct {
 	CallbackMethod  string            `json:"callback_method" binding:"required,oneof=GET POST PUT DELETE PATCH"`
 	CallbackBody    string            `json:"callback_body"`
 	CallbackHeaders map[string]string `json:"callback_headers"`
-	Timeout         int               `json:"timeout" binding:"min=1,max=300"`
 }
 
 // TimerDefinitionListRequest 定时器列表查询请求

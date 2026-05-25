@@ -29,7 +29,6 @@ const statusIcon: Record<string, React.ReactNode> = {
   FAILED: <CloseCircleOutlined className="danger-text" />,
   RUNNING: <SyncOutlined spin className="info-text" />,
   PENDING: <ClockCircleOutlined className="muted" />,
-  TIMEOUT: <CloseCircleOutlined className="danger-text" />,
 };
 
 const ExecutionList: React.FC = () => {

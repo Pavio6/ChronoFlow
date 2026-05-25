@@ -23,8 +23,6 @@ type TimerRecordRepository interface {
 	List(req *model.RecordListRequest) ([]*model.TimerRecord, int64, error)
 	// GetByTimerID 根据定时器 ID 获取最近的执行记录
 	GetByTimerID(timerID int64, limit int) ([]*model.TimerRecord, error)
-	// GetRunningRecords 获取超时的正在执行的记录（状态为 RUNNING 且执行时间超过指定时长）
-	GetRunningRecords(timeout time.Duration) ([]*model.TimerRecord, error)
 	// UpdateStatus 更新执行记录状态
 	UpdateStatus(id int64, status model.RecordStatus) error
 	// ClaimPendingByTimerIDAndTriggerTime 原子抢占一个待执行记录；仅 PENDING 可以进入 RUNNING
@@ -33,7 +31,7 @@ type TimerRecordRepository interface {
 	HasStartedByTimerIDAndTriggerTime(timerID int64, triggerTime time.Time) (bool, error)
 	// ExistsByTimerIDAndTriggerTime 幂等性检查：判断指定定时器在指定触发时间是否已有记录
 	ExistsByTimerIDAndTriggerTime(timerID int64, triggerTime time.Time) (bool, error)
-	// GetPendingByTimeRange 获取指定时间范围内的 PENDING 记录（Trigger DB 回退用）
+	// GetPendingByTimeRange 获取指定时间范围内的 PENDING 记录（Trigger DB 补偿用）
 	GetPendingByTimeRange(start, end time.Time) ([]*model.TimerRecord, error)
 	// HasPendingByTimeRangeAndBucket 判断指定时间范围和桶内是否存在 PENDING 记录
 	HasPendingByTimeRangeAndBucket(start, end time.Time, bucket int, bucketNum int) (bool, error)
@@ -146,20 +144,6 @@ func (r *timerRecordRepo) GetByTimerID(timerID int64, limit int) ([]*model.Timer
 	return items, nil
 }
 
-// GetRunningRecords 获取超时的正在执行的记录
-// 查询条件：状态为 RUNNING 且开始执行时间早于当前时间减去超时时长
-func (r *timerRecordRepo) GetRunningRecords(timeout time.Duration) ([]*model.TimerRecord, error) {
-	var items []*model.TimerRecord
-	threshold := time.Now().Add(-timeout)
-	err := r.db.Where("status = ? AND started_at < ?", model.RecordStatusRunning, threshold).
-		Order("started_at ASC").
-		Find(&items).Error
-	if err != nil {
-		return nil, fmt.Errorf("查询超时执行记录失败: %w", err)
-	}
-	return items, nil
-}
-
 // UpdateStatus 更新执行记录状态
 func (r *timerRecordRepo) UpdateStatus(id int64, status model.RecordStatus) error {
 	result := r.db.Model(&model.TimerRecord{}).
@@ -233,7 +217,7 @@ func (r *timerRecordRepo) ExistsByTimerIDAndTriggerTime(timerID int64, triggerTi
 }
 
 // GetPendingByTimeRange 获取指定时间范围内的 PENDING 记录
-// 用于 Trigger 的 DB 回退机制：当 Redis 缓存 miss 时，从 MySQL 查询未执行的任务
+// 用于 Trigger 的 DB 补偿机制：从 MySQL 查询未执行的任务，与 Redis 结果合并。
 func (r *timerRecordRepo) GetPendingByTimeRange(start, end time.Time) ([]*model.TimerRecord, error) {
 	var items []*model.TimerRecord
 	err := r.db.Where("status = ? AND trigger_time >= ? AND trigger_time < ?", model.RecordStatusPending, start, end).

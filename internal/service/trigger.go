@@ -19,11 +19,11 @@ import (
 //  1. 在时间片内持续轮询 Redis ZSet {time_range}:{bucket}
 //  2. 以不重叠的 [cursor, dueEnd) 时间窗口读取到期任务
 //  3. 分片扫描成功后将锁保留 success_expiration，抑制上一分钟回扫重入
-//  4. 若 Redis 无结果，回退查询 MySQL（冷启动兜底）
+//  4. 每个窗口合并 MySQL PENDING 记录，覆盖 Redis 部分投递失败
 //  5. 从协程池提交 Executor 协程执行每个任务
 //
 // 防重复机制：窗口游标避免单次扫描重复派发，Executor 原子状态抢占负责最终防重
-// DB 回退：冷启动时 Migrator 尚未预创建 Redis 数据，Trigger 从 MySQL 读取 PENDING 记录兜底
+// DB 补偿：MySQL 是事实来源，Trigger 合并已有 PENDING 记录以覆盖 Redis 缓存不完整
 type Trigger struct {
 	queue    *redis.RedisQueue
 	pool     *pool.GoWorkerPool
@@ -52,7 +52,7 @@ func NewTrigger(
 // Run 在指定时间片内轮询指定桶的 Redis ZSet，取出到期任务并提交 Executor 执行
 // timeRange: 时间范围标识（YYYY-MM-DD-HH:mm）
 // bucket: 桶号
-// bucketNum: 总桶数（用于 DB 回退时按 timer_id % bucketNum 过滤）
+// bucketNum: 总桶数（用于 DB 补偿时按 timer_id % bucketNum 过滤）
 // lock: Scheduler worker 获取的、带所有者 token 的分片锁
 // 此方法由 Scheduler 通过协程池调用
 func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketNum int, lock *redis.SchedulerLock) {
@@ -106,20 +106,19 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
 			continue
 		}
 
-		// Redis 无结果时，回退查询 MySQL（冷启动兜底）
-		if len(triggers) == 0 {
-			triggers, err = t.getDueTasksFromDB(ctx, timeRange, bucket, bucketNum, cursor, dueEnd)
-			if err != nil {
-				completed = false
-				logger.Error("Trigger DB 回退查询失败",
-					zap.String("time_range", timeRange),
-					zap.Int("bucket", bucket),
-					zap.Error(err),
-				)
-				time.Sleep(100 * time.Millisecond)
-				continue
-			}
+		// MySQL 是事实来源；即便 Redis 返回了部分任务，也必须合并未投递成功的 PENDING 记录。
+		dbTriggers, err := t.getDueTasksFromDB(ctx, timeRange, bucket, bucketNum, cursor, dueEnd)
+		if err != nil {
+			completed = false
+			logger.Error("Trigger DB 补偿查询失败",
+				zap.String("time_range", timeRange),
+				zap.Int("bucket", bucket),
+				zap.Error(err),
+			)
+			time.Sleep(100 * time.Millisecond)
+			continue
 		}
+		triggers = mergeTaskTriggers(triggers, dbTriggers)
 
 		if len(triggers) > 0 {
 			logger.Debug("Trigger 取出到期任务",
@@ -164,7 +163,7 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
 	)
 }
 
-// getDueTasksFromDB DB 回退：当 Redis 缓存 miss 时，从 MySQL 查询 PENDING 记录
+// getDueTasksFromDB DB 补偿：从 MySQL 查询扫描窗口内的 PENDING 记录
 // 过滤条件：status = PENDING, trigger_time 在当前扫描窗口内, timer_id % bucketNum == bucket
 func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucket int, bucketNum int, start, end time.Time) ([]*redis.TaskTrigger, error) {
 	records, err := t.recRepo.GetPendingByTimeRange(start, end)
@@ -185,7 +184,7 @@ func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucke
 	}
 
 	if len(triggers) > 0 {
-		logger.Debug("Trigger DB 回退命中",
+		logger.Debug("Trigger DB 补偿命中",
 			zap.String("time_range", timeRange),
 			zap.Int("bucket", bucket),
 			zap.Int("count", len(triggers)),
@@ -193,4 +192,25 @@ func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucke
 	}
 
 	return triggers, nil
+}
+
+func mergeTaskTriggers(groups ...[]*redis.TaskTrigger) []*redis.TaskTrigger {
+	type triggerKey struct {
+		timerID     int64
+		triggerTime int64
+	}
+
+	merged := make([]*redis.TaskTrigger, 0)
+	seen := make(map[triggerKey]struct{})
+	for _, group := range groups {
+		for _, trigger := range group {
+			key := triggerKey{timerID: trigger.TimerID, triggerTime: trigger.TriggerTime.UnixMilli()}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			merged = append(merged, trigger)
+		}
+	}
+	return merged
 }

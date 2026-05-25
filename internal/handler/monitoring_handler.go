@@ -79,7 +79,6 @@ func (h *MonitoringHandler) GetSummary(c *gin.Context) {
 				"running": recordStats[model.RecordStatusRunning],
 				"success": recordStats[model.RecordStatusSuccess],
 				"failed":  recordStats[model.RecordStatusFailed],
-				"timeout": recordStats[model.RecordStatusTimeout],
 			},
 			"redis":    queueStats,
 			"runtime":  h.reporter.Snapshot(),

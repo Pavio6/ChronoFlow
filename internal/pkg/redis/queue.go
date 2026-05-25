@@ -18,6 +18,8 @@ const (
 	BloomPrefix = "chronoflow:bloom:"
 	// BucketMapPrefix 分桶映射 key 前缀，完整 key: {prefix}{time_range}
 	BucketMapPrefix = "chronoflow:bucket:"
+	// TaskCountPrefix 分钟累计投递任务数 key 前缀，完整 key: {prefix}{time_range}
+	TaskCountPrefix = "chronoflow:task_count:"
 )
 
 // TaskTrigger 任务触发信息
@@ -35,10 +37,11 @@ type RedisQueue struct {
 
 // QueueStats Redis 队列与锁的聚合统计
 type QueueStats struct {
-	QueueKeys  int64 `json:"queue_keys"`
-	QueueItems int64 `json:"queue_items"`
-	LockKeys   int64 `json:"lock_keys"`
-	BucketKeys int64 `json:"bucket_keys"`
+	QueueKeys     int64 `json:"queue_keys"`
+	QueueItems    int64 `json:"queue_items"`
+	LockKeys      int64 `json:"lock_keys"`
+	BucketKeys    int64 `json:"bucket_keys"`
+	TaskCountKeys int64 `json:"task_count_keys"`
 }
 
 // InitRedis 初始化 Redis 客户端连接
@@ -90,7 +93,7 @@ func (q *RedisQueue) PushTask(ctx context.Context, timeRange string, bucket int,
 }
 
 // BatchPushTasks 批量推送任务到指定时间片桶（Pipeline 模式）
-func (q *RedisQueue) BatchPushTasks(ctx context.Context, timeRange string, bucket int, triggers []*TaskTrigger) error {
+func (q *RedisQueue) BatchPushTasks(ctx context.Context, timeRange string, bucket int, triggers []*TaskTrigger, expiration time.Duration) error {
 	if len(triggers) == 0 {
 		return nil
 	}
@@ -105,6 +108,9 @@ func (q *RedisQueue) BatchPushTasks(ctx context.Context, timeRange string, bucke
 			Score:  score,
 			Member: member,
 		})
+	}
+	if expiration > 0 {
+		pipe.Expire(ctx, key, expiration)
 	}
 
 	_, err := pipe.Exec(ctx)
@@ -168,10 +174,73 @@ func buildBucketMapKey(timeRange string) string {
 	return fmt.Sprintf("%s%s", BucketMapPrefix, timeRange)
 }
 
-// SetBucketNum 设置指定时间范围的分桶数量
-func (q *RedisQueue) SetBucketNum(ctx context.Context, timeRange string, bucketNum int, expiration time.Duration) error {
-	key := buildBucketMapKey(timeRange)
-	return q.client.Set(ctx, key, bucketNum, expiration).Err()
+func buildTaskCountKey(timeRange string) string {
+	return fmt.Sprintf("%s%s", TaskCountPrefix, timeRange)
+}
+
+// ReserveMinuteBuckets 为新增任务原子登记分钟级容量，并返回最终可用桶数。
+// 桶数只允许增加；已有任务不需要随扩桶重新搬迁。
+func (q *RedisQueue) ReserveMinuteBuckets(
+	ctx context.Context,
+	timeRange string,
+	newTaskCount int,
+	baseBucketNum int,
+	tasksPerBucket int,
+	maxBucketNum int,
+	expiration time.Duration,
+) (int, error) {
+	if newTaskCount <= 0 {
+		return q.GetBucketNum(ctx, timeRange, baseBucketNum)
+	}
+	if baseBucketNum < 1 {
+		baseBucketNum = 1
+	}
+	if maxBucketNum < baseBucketNum {
+		maxBucketNum = baseBucketNum
+	}
+	if tasksPerBucket < 1 {
+		tasksPerBucket = 1
+	}
+	ttlMillis := expiration.Milliseconds()
+	if ttlMillis < 1 {
+		ttlMillis = time.Minute.Milliseconds()
+	}
+
+	const reserveScript = `
+local total = redis.call('INCRBY', KEYS[2], ARGV[1])
+local base = tonumber(ARGV[2])
+local perBucket = tonumber(ARGV[3])
+local maxBucket = tonumber(ARGV[4])
+local ttl = tonumber(ARGV[5])
+
+local required = math.ceil(total / perBucket)
+if required < base then required = base end
+if required > maxBucket then required = maxBucket end
+
+local current = tonumber(redis.call('GET', KEYS[1]) or '0')
+local actual = current
+if required > current then
+    redis.call('SET', KEYS[1], required)
+    actual = required
+end
+if actual < base then
+    redis.call('SET', KEYS[1], base)
+    actual = base
+end
+
+redis.call('PEXPIRE', KEYS[1], ttl)
+redis.call('PEXPIRE', KEYS[2], ttl)
+return actual
+`
+
+	actual, err := q.client.Eval(ctx, reserveScript, []string{
+		buildBucketMapKey(timeRange),
+		buildTaskCountKey(timeRange),
+	}, newTaskCount, baseBucketNum, tasksPerBucket, maxBucketNum, ttlMillis).Int()
+	if err != nil {
+		return baseBucketNum, fmt.Errorf("登记分钟动态分桶失败: %w", err)
+	}
+	return actual, nil
 }
 
 // GetBucketNum 获取指定时间范围的分桶数量
@@ -212,6 +281,13 @@ func (q *RedisQueue) Stats(ctx context.Context) (QueueStats, error) {
 
 	if err := q.scanKeys(ctx, BucketMapPrefix+"*", func(key string) error {
 		stats.BucketKeys++
+		return nil
+	}); err != nil {
+		return stats, err
+	}
+
+	if err := q.scanKeys(ctx, TaskCountPrefix+"*", func(key string) error {
+		stats.TaskCountKeys++
 		return nil
 	}); err != nil {
 		return stats, err

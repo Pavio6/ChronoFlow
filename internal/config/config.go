@@ -42,14 +42,20 @@ type RedisConfig struct {
 // SchedulerConfig 调度器配置
 // migrate_step_minutes: Migrator 执行间隔（分钟）
 // step2_duration: 二级时间步（秒），本地定时器定义及状态缓存有效期
-// bucket_num: 分桶数量
+// base_bucket_num: 每分钟初始扫描桶数
+// bucket_num: 每分钟允许扩展到的最大桶数
+// tasks_per_bucket: 每个桶承载的目标任务数，用于分钟级扩桶
+// bucket_metadata_ttl: 时间片结束后 Redis 队列及分桶元数据额外保留秒数
 // scan_interval: Scheduler 轮询间隔（秒）
 // lock_expiration: 分布式锁初始 TTL（秒），必须大于时间片时长（60 秒）
 // success_expiration: 分片扫描成功后的锁保留 TTL（秒），覆盖上一分钟回扫窗口
 type SchedulerConfig struct {
 	MigrateStepMinutes int `mapstructure:"migrate_step_minutes"`
 	Step2Duration      int `mapstructure:"step2_duration"`
+	BaseBucketNum      int `mapstructure:"base_bucket_num"`
 	BucketNum          int `mapstructure:"bucket_num"`
+	TasksPerBucket     int `mapstructure:"tasks_per_bucket"`
+	BucketMetadataTTL  int `mapstructure:"bucket_metadata_ttl"`
 	ScanInterval       int `mapstructure:"scan_interval"`
 	LockExpiration     int `mapstructure:"lock_expiration"`
 	SuccessExpiration  int `mapstructure:"success_expiration"`
@@ -57,7 +63,6 @@ type SchedulerConfig struct {
 
 // ExecutorConfig 执行器配置
 type ExecutorConfig struct {
-	Timeout        int `mapstructure:"timeout"`          // HTTP 回调超时（秒）
 	WorkerPoolSize int `mapstructure:"worker_pool_size"` // 协程池大小
 }
 
@@ -94,9 +99,25 @@ func Load(configPath string) (*Config, error) {
 	if err := viper.Unmarshal(cfg); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
+	normalizeSchedulerConfig(&cfg.Scheduler)
 
 	AppConfig = cfg
 	return cfg, nil
+}
+
+func normalizeSchedulerConfig(cfg *SchedulerConfig) {
+	if cfg.BaseBucketNum < 1 {
+		cfg.BaseBucketNum = 1
+	}
+	if cfg.BucketNum < cfg.BaseBucketNum {
+		cfg.BucketNum = cfg.BaseBucketNum
+	}
+	if cfg.TasksPerBucket < 1 {
+		cfg.TasksPerBucket = 100
+	}
+	if cfg.BucketMetadataTTL < 1 {
+		cfg.BucketMetadataTTL = 600
+	}
 }
 
 // setDefaults 设置配置默认值
@@ -120,13 +141,15 @@ func setDefaults() {
 	// 调度器默认配置
 	viper.SetDefault("scheduler.migrate_step_minutes", 60) // 60 分钟
 	viper.SetDefault("scheduler.step2_duration", 120)      // 2 分钟
-	viper.SetDefault("scheduler.bucket_num", 3)
-	viper.SetDefault("scheduler.scan_interval", 1)        // 1 秒
-	viper.SetDefault("scheduler.lock_expiration", 70)     // 70 秒，参考 xTimer tryLockSeconds
-	viper.SetDefault("scheduler.success_expiration", 130) // 130 秒，分片成功扫描后的保留 TTL
+	viper.SetDefault("scheduler.base_bucket_num", 1)
+	viper.SetDefault("scheduler.bucket_num", 3)            // 动态分桶最大桶数
+	viper.SetDefault("scheduler.tasks_per_bucket", 100)    // 每 100 个投递任务扩一个桶
+	viper.SetDefault("scheduler.bucket_metadata_ttl", 600) // 时间片结束后保留 10 分钟
+	viper.SetDefault("scheduler.scan_interval", 1)         // 1 秒
+	viper.SetDefault("scheduler.lock_expiration", 70)      // 70 秒，参考 xTimer tryLockSeconds
+	viper.SetDefault("scheduler.success_expiration", 130)  // 130 秒，分片成功扫描后的保留 TTL
 
 	// 执行器默认配置
-	viper.SetDefault("executor.timeout", 30)
 	viper.SetDefault("executor.worker_pool_size", 100)
 
 	// 日志默认配置

@@ -80,7 +80,6 @@ const Monitoring: React.FC = () => {
     { label: '失败', value: summary.records.failed, color: '#dc2626' },
     { label: '执行中', value: summary.records.running, color: '#2563eb' },
     { label: '等待中', value: summary.records.pending, color: '#a1a1aa' },
-    { label: '超时', value: summary.records.timeout, color: '#d97706' },
   ];
 
   return (

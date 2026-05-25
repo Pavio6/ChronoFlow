@@ -87,7 +87,6 @@ const TaskList: React.FC = () => {
         return <Tag color={config?.color} className="status-tag">{config?.label || status}</Tag>;
       },
     },
-    { title: '超时', dataIndex: 'timeout', width: 60, render: (v: number) => `${v}s` },
     {
       title: '操作',
       key: 'action',

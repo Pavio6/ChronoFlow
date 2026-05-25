@@ -27,7 +27,7 @@ Migrator ──[协程池]──→ Scheduler ──[协程池]──→ Trigger
 等待第一次 ticker 触发 → 每隔 migrate_step_minutes（默认 60 分钟）执行
 ```
 
-启动时不立即执行，冷启动期间的任务由 Trigger 的 DB 回退机制兜底。
+启动时不立即执行，等待首次 ticker 后创建后续迁移窗口内的任务。
 
 ### 关键代码
 
@@ -112,8 +112,8 @@ func (s *Scheduler) schedule(ctx context.Context) {
     prevTimeRange := formatTimeRange(now.Add(-time.Minute))
     
     // 分别获取各分钟的动态分桶数（不同分钟可能不同）
-    currentBucketNum, _ := s.queue.GetBucketNum(ctx, currentTimeRange, s.cfg.BucketNum)
-    prevBucketNum, _ := s.queue.GetBucketNum(ctx, prevTimeRange, s.cfg.BucketNum)
+    currentBucketNum, _ := s.queue.GetBucketNum(ctx, currentTimeRange, s.cfg.BaseBucketNum)
+    prevBucketNum, _ := s.queue.GetBucketNum(ctx, prevTimeRange, s.cfg.BaseBucketNum)
     
     // 锁初始 TTL，参考 xTimer tryLockSeconds（必须大于时间片时长 60 秒）
     lockExpiration := time.Duration(s.cfg.LockExpiration) * time.Second
@@ -160,7 +160,7 @@ func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket in
 - 在时间片内持续轮询 Redis ZSet
 - 用不重叠扫描窗口读取到期任务，避免一次 Trigger 重复派发同一 member
 - 扫描成功后保留锁 TTL（参考 xTimer successExpireSeconds），覆盖上一分钟回扫
-- Redis 无结果时回退查询 MySQL（冷启动兜底）
+- 每个窗口合并已有 MySQL PENDING 记录（Redis 部分投递失败兜底）
 - 提交 Executor 到协程池
 
 ### 执行流程
@@ -177,10 +177,9 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
 
         triggers, _ := t.queue.GetTasksByTime(ctx, timeRange, bucket, cursor, dueEnd)
         
-        // Redis 无结果时，回退查询 MySQL（冷启动兜底）
-        if len(triggers) == 0 {
-            triggers, _ = t.getDueTasksFromDB(ctx, timeRange, bucket, bucketNum, cursor, dueEnd)
-        }
+        // 合并已有 MySQL PENDING 记录，覆盖 Redis 部分写入失败
+        dbTriggers, _ := t.getDueTasksFromDB(ctx, timeRange, bucket, bucketNum, cursor, dueEnd)
+        triggers = mergeTaskTriggers(triggers, dbTriggers)
         
         // 提交 Executor
         for _, trigger := range triggers {
@@ -193,7 +192,7 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
     lock.Extend(ctx, successExpiration)
 }
 
-// getDueTasksFromDB DB 回退：查询 MySQL 中 PENDING 状态的记录
+// getDueTasksFromDB DB 部分投递补偿：查询 MySQL 中已存在的 PENDING 记录
 func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucket int, bucketNum int, start, end time.Time) ([]*redis.TaskTrigger, error) {
     records, _ := t.recRepo.GetPendingByTimeRange(start, end)
     

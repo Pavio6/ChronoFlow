@@ -23,8 +23,7 @@ POST /api/v1/timers
   "callback_url": "http://localhost:9090/callback/success",
   "callback_method": "POST",
   "callback_body": "{\"action\": \"check_orders\"}",
-  "callback_headers": {"Authorization": "Bearer token123"},
-  "timeout": 30
+  "callback_headers": {"Authorization": "Bearer token123"}
 }
 ```
 
@@ -44,7 +43,6 @@ POST /api/v1/timers
     "callback_body": "{\"action\": \"check_orders\"}",
     "callback_headers": "{\"Authorization\":\"Bearer token123\"}",
     "status": "INACTIVE",
-    "timeout": 30,
     "created_at": "2026-05-22T10:00:00Z",
     "updated_at": "2026-05-22T10:00:00Z"
   }
@@ -89,7 +87,7 @@ GET /api/v1/timers/:id
 
 ### 定义不可修改
 
-定时器定义创建后不可修改，包括 Cron、回调参数和超时配置。系统不提供 `PUT /api/v1/timers/:id` 接口；需要修改定义时，应删除旧定时器并创建新定时器。
+定时器定义创建后不可修改，包括 Cron 和回调参数。系统不提供 `PUT /api/v1/timers/:id` 接口；需要修改定义时，应删除旧定时器并创建新定时器。
 
 ### 删除定时器
 
