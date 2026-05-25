@@ -8,12 +8,13 @@ import (
 
 // Config 应用全局配置
 type Config struct {
-	Server    ServerConfig    `mapstructure:"server"`
-	Database  DatabaseConfig  `mapstructure:"database"`
-	Redis     RedisConfig     `mapstructure:"redis"`
-	Scheduler SchedulerConfig `mapstructure:"scheduler"`
-	Executor  ExecutorConfig  `mapstructure:"executor"`
-	Log       LogConfig       `mapstructure:"log"`
+	Server     ServerConfig     `mapstructure:"server"`
+	Database   DatabaseConfig   `mapstructure:"database"`
+	Redis      RedisConfig      `mapstructure:"redis"`
+	Scheduler  SchedulerConfig  `mapstructure:"scheduler"`
+	Executor   ExecutorConfig   `mapstructure:"executor"`
+	Monitoring MonitoringConfig `mapstructure:"monitoring"`
+	Log        LogConfig        `mapstructure:"log"`
 }
 
 // ServerConfig HTTP 服务器配置
@@ -66,6 +67,14 @@ type ExecutorConfig struct {
 	WorkerPoolSize int `mapstructure:"worker_pool_size"` // 协程池大小
 }
 
+// MonitoringConfig controls periodic collection of health gauges.
+type MonitoringConfig struct {
+	CollectIntervalSeconds int    `mapstructure:"collect_interval_seconds"`
+	PendingOverdueSeconds  int    `mapstructure:"pending_overdue_seconds"`
+	RunningStaleSeconds    int    `mapstructure:"running_stale_seconds"`
+	PrometheusURL          string `mapstructure:"prometheus_url"`
+}
+
 // LogConfig 日志配置
 type LogConfig struct {
 	Level    string `mapstructure:"level"`
@@ -100,6 +109,7 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 	normalizeSchedulerConfig(&cfg.Scheduler)
+	normalizeMonitoringConfig(&cfg.Monitoring)
 
 	AppConfig = cfg
 	return cfg, nil
@@ -117,6 +127,21 @@ func normalizeSchedulerConfig(cfg *SchedulerConfig) {
 	}
 	if cfg.BucketMetadataTTL < 1 {
 		cfg.BucketMetadataTTL = 600
+	}
+}
+
+func normalizeMonitoringConfig(cfg *MonitoringConfig) {
+	if cfg.CollectIntervalSeconds < 1 {
+		cfg.CollectIntervalSeconds = 10
+	}
+	if cfg.PendingOverdueSeconds < 1 {
+		cfg.PendingOverdueSeconds = 120
+	}
+	if cfg.RunningStaleSeconds < 1 {
+		cfg.RunningStaleSeconds = 60
+	}
+	if cfg.PrometheusURL == "" {
+		cfg.PrometheusURL = "http://localhost:9090"
 	}
 }
 
@@ -151,6 +176,12 @@ func setDefaults() {
 
 	// 执行器默认配置
 	viper.SetDefault("executor.worker_pool_size", 100)
+
+	// 可观测性采集默认配置
+	viper.SetDefault("monitoring.collect_interval_seconds", 10)
+	viper.SetDefault("monitoring.pending_overdue_seconds", 120)
+	viper.SetDefault("monitoring.running_stale_seconds", 60)
+	viper.SetDefault("monitoring.prometheus_url", "http://localhost:9090")
 
 	// 日志默认配置
 	viper.SetDefault("log.level", "info")

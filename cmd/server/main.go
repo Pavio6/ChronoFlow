@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -22,7 +23,6 @@ import (
 	"github.com/chronoflow/internal/service"
 	"github.com/chronoflow/pkg/logger"
 	"github.com/gin-gonic/gin"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.uber.org/zap"
 )
 
@@ -108,6 +108,9 @@ func main() {
 	// 定时器 CRUD 服务
 	timerService := service.NewTimerService(defRepo, recRepo, cronParser, queue, &cfg.Scheduler)
 
+	// 当前状态指标采集器
+	monitorCollector := service.NewMonitorCollector(recRepo, queue, reporter, &cfg.Monitoring)
+
 	// ========== 9. 启动后台服务 ==========
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -121,10 +124,14 @@ func main() {
 	// 启动调度器（轮询 + 分发）
 	go scheduler.Start(ctx)
 
+	// 定期采集记录积压与 Redis 队列状态
+	go monitorCollector.Start(ctx)
+
 	logger.Info("后台服务已启动",
 		zap.Int("migrate_step_minutes", cfg.Scheduler.MigrateStepMinutes),
 		zap.Int("step2_duration", cfg.Scheduler.Step2Duration),
 		zap.Int("bucket_num", cfg.Scheduler.BucketNum),
+		zap.Int("monitor_collect_interval_seconds", cfg.Monitoring.CollectIntervalSeconds),
 	)
 
 	// ========== 10. 配置 HTTP 服务器 ==========
@@ -138,11 +145,11 @@ func main() {
 	// 注册 API 路由
 	timerHandler := handler.NewTimerHandler(timerService)
 	timerHandler.RegisterRoutes(r)
-	monitoringHandler := handler.NewMonitoringHandler(defRepo, recRepo, queue, reporter)
+	monitoringHandler := handler.NewMonitoringHandler(defRepo, recRepo, queue, reporter, &cfg.Monitoring)
 	monitoringHandler.RegisterRoutes(r)
 
 	// Prometheus 指标端点
-	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+	r.GET("/metrics", gin.WrapH(reporter.GetHandler()))
 
 	// 健康检查端点
 	r.GET("/health", func(c *gin.Context) {
@@ -156,7 +163,14 @@ func main() {
 	r.Static("/assets", "./web/dist/assets")
 	r.StaticFile("/", "./web/dist/index.html")
 	r.NoRoute(func(c *gin.Context) {
-		// SPA 路由回退：非 API 请求都返回 index.html
+		if c.Request.URL.Path == "/api" || strings.HasPrefix(c.Request.URL.Path, "/api/") {
+			c.JSON(http.StatusNotFound, gin.H{
+				"code":    http.StatusNotFound,
+				"message": "接口不存在",
+			})
+			return
+		}
+		// SPA 路由回退：非 API 请求返回 index.html。
 		c.File("./web/dist/index.html")
 	})
 
