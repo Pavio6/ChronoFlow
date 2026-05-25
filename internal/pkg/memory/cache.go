@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"sync"
 	"time"
 
@@ -14,7 +15,7 @@ type cacheEntry struct {
 }
 
 // TimerCache 定时器完整定义（包含状态）的本地内存缓存（二级迁移架构）
-// 使用读写锁保证并发安全，支持 TTL 过期和批量操作
+// 使用读写锁保证并发安全，支持 TTL 过期、容量淘汰和批量操作
 type TimerCache struct {
 	mu      sync.RWMutex
 	cache   map[int64]*cacheEntry
@@ -34,18 +35,25 @@ func NewTimerCache(maxSize int) *TimerCache {
 // 返回值：定时器定义、是否存在（未过期）
 func (c *TimerCache) Get(id int64) (*model.TimerDefinition, bool) {
 	c.mu.RLock()
-	defer c.mu.RUnlock()
-
 	entry, exists := c.cache[id]
 	if !exists {
+		c.mu.RUnlock()
 		return nil, false
 	}
+	if !time.Now().After(entry.expireAt) {
+		c.mu.RUnlock()
+		return entry.def, true
+	}
+	c.mu.RUnlock()
 
-	// 检查是否已过期
-	if time.Now().After(entry.expireAt) {
+	// 过期数据不再提供读取，并在访问时从 map 中移除。
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, exists = c.cache[id]
+	if !exists || time.Now().After(entry.expireAt) {
+		delete(c.cache, id)
 		return nil, false
 	}
-
 	return entry.def, true
 }
 
@@ -57,9 +65,12 @@ func (c *TimerCache) Set(id int64, def *model.TimerDefinition, ttl time.Duration
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
+	now := time.Now()
+	c.removeExpiredLocked(now)
+	c.ensureCapacityLocked(id)
 	c.cache[id] = &cacheEntry{
 		def:      def,
-		expireAt: time.Now().Add(ttl),
+		expireAt: now.Add(ttl),
 	}
 }
 
@@ -78,8 +89,11 @@ func (c *TimerCache) SetBatch(entries map[int64]*model.TimerDefinition, ttl time
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	expireAt := time.Now().Add(ttl)
+	now := time.Now()
+	c.removeExpiredLocked(now)
+	expireAt := now.Add(ttl)
 	for id, def := range entries {
+		c.ensureCapacityLocked(id)
 		c.cache[id] = &cacheEntry{
 			def:      def,
 			expireAt: expireAt,
@@ -87,7 +101,7 @@ func (c *TimerCache) SetBatch(entries map[int64]*model.TimerDefinition, ttl time
 	}
 }
 
-// Size 返回当前缓存条目数（包含已过期但未清理的条目）
+// Size 返回当前 map 条目数；后台清理周期之间可能短暂包含过期条目。
 func (c *TimerCache) Size() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
@@ -101,15 +115,59 @@ func (c *TimerCache) Cleanup() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	now := time.Now()
-	removed := 0
+	return c.removeExpiredLocked(time.Now())
+}
 
+// StartCleanup 周期清理不再被读取的过期条目，直至 context 被取消。
+func (c *TimerCache) StartCleanup(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			c.Cleanup()
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
+func (c *TimerCache) removeExpiredLocked(now time.Time) int {
+	removed := 0
 	for id, entry := range c.cache {
 		if now.After(entry.expireAt) {
 			delete(c.cache, id)
 			removed++
 		}
 	}
-
 	return removed
+}
+
+func (c *TimerCache) ensureCapacityLocked(id int64) {
+	if c.maxSize <= 0 {
+		return
+	}
+	if _, exists := c.cache[id]; exists || len(c.cache) < c.maxSize {
+		return
+	}
+
+	var (
+		evictID int64
+		evictAt time.Time
+		found   bool
+	)
+	for existingID, entry := range c.cache {
+		if !found || entry.expireAt.Before(evictAt) {
+			evictID = existingID
+			evictAt = entry.expireAt
+			found = true
+		}
+	}
+	if found {
+		delete(c.cache, evictID)
+	}
 }

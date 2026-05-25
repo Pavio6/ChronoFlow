@@ -69,6 +69,7 @@ func main() {
 
 	// 内存缓存（最大 10000 条）
 	timerCache := memory.NewTimerCache(10000)
+	timerCacheTTL := time.Duration(cfg.Scheduler.Step2Duration) * time.Second
 
 	// Cron 表达式解析器
 	cronParser := cron.NewCronParser()
@@ -93,7 +94,7 @@ func main() {
 	executor := service.NewExecutor(
 		defRepo, recRepo, bloomFilter, timerCache,
 		reporter, &cfg.Executor,
-		time.Duration(cfg.Scheduler.Step2Duration)*time.Second,
+		timerCacheTTL,
 	)
 
 	// 触发器（被 Scheduler 调用，DB 回退需要 recRepo）
@@ -114,6 +115,9 @@ func main() {
 	// ========== 9. 启动后台服务 ==========
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+
+	// 清理不再访问的过期本地定义缓存。
+	go timerCache.StartCleanup(ctx, timerCacheTTL)
 
 	// 启动迁移器（一级迁移：MySQL -> Redis）
 	go migrator.Start(ctx)
