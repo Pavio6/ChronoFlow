@@ -56,8 +56,16 @@ type TimerDefinitionListRequest struct {
 
 // TimerDefinitionListResponse 定时器列表查询响应
 type TimerDefinitionListResponse struct {
-	Total    int64              `json:"total"`
-	Page     int                `json:"page"`
-	PageSize int                `json:"page_size"`
-	Items    []*TimerDefinition `json:"items"`
+	Total    int64                    `json:"total"`
+	Page     int                      `json:"page"`
+	PageSize int                      `json:"page_size"`
+	Items    []*TimerDefinition       `json:"items"`
+	Stats    TimerDefinitionListStats `json:"stats"`
+}
+
+// TimerDefinitionListStats 定时器列表顶部使用的全量可见状态统计。
+type TimerDefinitionListStats struct {
+	Total    int64 `json:"total"`
+	Active   int64 `json:"active"`
+	Inactive int64 `json:"inactive"`
 }

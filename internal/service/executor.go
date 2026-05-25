@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -128,10 +129,12 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 		)
 		return
 	}
-	e.reporter.ReportTrigger(def.App)
+	e.reporter.ReportTrigger()
 
 	// 执行 HTTP 回调
+	callbackStart := time.Now()
 	responseCode, responseBody, err := e.executeHTTPCallback(def, record)
+	callbackDuration := time.Since(callbackStart)
 
 	// 计算执行耗时
 	execDuration := time.Since(start)
@@ -144,8 +147,7 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 		record.Status = model.RecordStatusFailed
 		record.ErrorMessage = err.Error()
 
-		// 上报失败指标
-		e.reporter.ReportExecFailed(timerID, def.App, "error")
+		e.reporter.ReportCallback(metrics.ResultFailed, callbackDuration)
 
 		logger.Error("Executor 任务执行失败",
 			zap.Int64("timer_id", timerID),
@@ -166,8 +168,7 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 			)
 		}
 
-		// 上报成功指标
-		e.reporter.ReportExecSuccess(timerID, def.App)
+		e.reporter.ReportCallback(metrics.ResultSuccess, callbackDuration)
 
 		logger.Info("Executor 任务执行成功",
 			zap.Int64("timer_id", timerID),
@@ -184,9 +185,6 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 		)
 	}
 
-	// 上报执行指标
-	e.reporter.ReportExecRecord(timerID, def.App)
-	e.reporter.ReportExecDuration(timerID, def.App, float64(execDuration.Milliseconds()))
 }
 
 // getTimerDefinition 获取包含状态的本地定义缓存；ACTIVE 状态可在 cacheTTL 内滞后。
@@ -239,10 +237,15 @@ func (e *Executor) executeHTTPCallback(def *model.TimerDefinition, record *model
 
 	// 设置自定义请求头
 	if def.CallbackHeaders != "" {
-		// 简单解析 JSON 格式的 headers
-		// 这里简化处理，实际应该用 json.Unmarshal
-		req.Header.Set("X-ChronoFlow-Timer-ID", fmt.Sprintf("%d", def.ID))
+		var headers map[string]string
+		if err := json.Unmarshal([]byte(def.CallbackHeaders), &headers); err != nil {
+			return 0, "", fmt.Errorf("解析回调请求头失败: %w", err)
+		}
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
 	}
+	req.Header.Set("X-ChronoFlow-Timer-ID", fmt.Sprintf("%d", def.ID))
 
 	// 执行请求
 	resp, err := e.httpClient.Do(req)

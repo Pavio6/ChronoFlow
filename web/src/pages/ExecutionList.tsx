@@ -47,12 +47,7 @@ const ExecutionList: React.FC = () => {
       const items = res.items || [];
       setRecords(items);
       setTotal(res.total);
-      setStats({
-        total: res.total,
-        success: items.filter(r => r.status === 'SUCCESS').length,
-        failed: items.filter(r => r.status === 'FAILED').length,
-        running: items.filter(r => r.status === 'RUNNING').length,
-      });
+      setStats(res.stats);
     } catch (error: unknown) {
       message.error((error as Error).message || '加载失败');
     } finally {

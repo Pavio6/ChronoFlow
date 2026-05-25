@@ -21,6 +21,8 @@ type TimerRecordRepository interface {
 	Update(record *model.TimerRecord) error
 	// List 分页查询执行记录列表
 	List(req *model.RecordListRequest) ([]*model.TimerRecord, int64, error)
+	// CountListByStatus 按列表筛选条件统计执行状态
+	CountListByStatus(req *model.RecordListRequest) (map[model.RecordStatus]int64, error)
 	// GetByTimerID 根据定时器 ID 获取最近的执行记录
 	GetByTimerID(timerID int64, limit int) ([]*model.TimerRecord, error)
 	// UpdateStatus 更新执行记录状态
@@ -37,6 +39,10 @@ type TimerRecordRepository interface {
 	HasPendingByTimeRangeAndBucket(start, end time.Time, bucket int, bucketNum int) (bool, error)
 	// CountByStatus 按执行状态统计记录数量
 	CountByStatus() (map[model.RecordStatus]int64, error)
+	// CountPendingOverdue 统计触发时间已超过阈值但仍未执行的记录
+	CountPendingOverdue(before time.Time) (int64, error)
+	// CountRunningStale 统计开始时间已超过阈值但仍在运行的记录
+	CountRunningStale(before time.Time) (int64, error)
 }
 
 // timerRecordRepo 定时器执行记录仓库实现
@@ -128,6 +134,33 @@ func (r *timerRecordRepo) List(req *model.RecordListRequest) ([]*model.TimerReco
 	}
 
 	return items, total, nil
+}
+
+// CountListByStatus 按列表筛选条件统计执行记录状态。
+func (r *timerRecordRepo) CountListByStatus(req *model.RecordListRequest) (map[model.RecordStatus]int64, error) {
+	type row struct {
+		Status model.RecordStatus
+		Count  int64
+	}
+
+	query := r.db.Model(&model.TimerRecord{})
+	if req.TimerID > 0 {
+		query = query.Where("timer_id = ?", req.TimerID)
+	}
+	if req.Status != "" {
+		query = query.Where("status = ?", req.Status)
+	}
+
+	var rows []row
+	if err := query.Select("status, count(*) as count").Group("status").Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("统计执行记录列表状态失败: %w", err)
+	}
+
+	result := make(map[model.RecordStatus]int64, len(rows))
+	for _, item := range rows {
+		result[item.Status] = item.Count
+	}
+	return result, nil
 }
 
 // GetByTimerID 根据定时器 ID 获取最近的执行记录
@@ -263,4 +296,26 @@ func (r *timerRecordRepo) CountByStatus() (map[model.RecordStatus]int64, error) 
 		result[item.Status] = item.Count
 	}
 	return result, nil
+}
+
+// CountPendingOverdue 统计触发时间在阈值之前的待执行记录。
+func (r *timerRecordRepo) CountPendingOverdue(before time.Time) (int64, error) {
+	var count int64
+	if err := r.db.Model(&model.TimerRecord{}).
+		Where("status = ? AND trigger_time < ?", model.RecordStatusPending, before).
+		Count(&count).Error; err != nil {
+		return 0, fmt.Errorf("统计超期待执行记录失败: %w", err)
+	}
+	return count, nil
+}
+
+// CountRunningStale 统计开始时间在阈值之前的运行中记录。
+func (r *timerRecordRepo) CountRunningStale(before time.Time) (int64, error) {
+	var count int64
+	if err := r.db.Model(&model.TimerRecord{}).
+		Where("status = ? AND started_at IS NOT NULL AND started_at < ?", model.RecordStatusRunning, before).
+		Count(&count).Error; err != nil {
+		return 0, fmt.Errorf("统计卡住执行记录失败: %w", err)
+	}
+	return count, nil
 }

@@ -56,8 +56,18 @@ type RecordListRequest struct {
 
 // RecordListResponse 执行记录列表查询响应
 type RecordListResponse struct {
-	Total    int64          `json:"total"`
-	Page     int            `json:"page"`
-	PageSize int            `json:"page_size"`
-	Items    []*TimerRecord `json:"items"`
+	Total    int64           `json:"total"`
+	Page     int             `json:"page"`
+	PageSize int             `json:"page_size"`
+	Items    []*TimerRecord  `json:"items"`
+	Stats    RecordListStats `json:"stats"`
+}
+
+// RecordListStats 执行列表顶部使用的全量状态统计。
+type RecordListStats struct {
+	Total   int64 `json:"total"`
+	Pending int64 `json:"pending"`
+	Running int64 `json:"running"`
+	Success int64 `json:"success"`
+	Failed  int64 `json:"failed"`
 }

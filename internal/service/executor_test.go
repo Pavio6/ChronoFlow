@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -33,6 +36,10 @@ func (r *stubTimerDefinitionRepo) Delete(int64) error {
 
 func (r *stubTimerDefinitionRepo) List(*model.TimerDefinitionListRequest) ([]*model.TimerDefinition, int64, error) {
 	return nil, 0, nil
+}
+
+func (r *stubTimerDefinitionRepo) CountListByStatus(*model.TimerDefinitionListRequest) (map[model.TimerStatus]int64, error) {
+	return nil, nil
 }
 
 func (r *stubTimerDefinitionRepo) GetActiveDefinitions() ([]*model.TimerDefinition, error) {
@@ -95,4 +102,58 @@ func TestGetTimerDefinitionDoesNotCacheInactiveStatus(t *testing.T) {
 	if repo.calls != 2 {
 		t.Fatalf("repository calls = %d, want 2 because INACTIVE is not cached", repo.calls)
 	}
+}
+
+func TestExecuteHTTPCallbackSendsConfiguredHeaders(t *testing.T) {
+	var authorization string
+	var traceID string
+	var timerID string
+	executor := &Executor{httpClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		authorization = r.Header.Get("Authorization")
+		traceID = r.Header.Get("X-Trace-ID")
+		timerID = r.Header.Get("X-ChronoFlow-Timer-ID")
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("ok")),
+		}, nil
+	})}}
+	def := &model.TimerDefinition{
+		ID:              42,
+		CallbackHeaders: `{"Authorization":"Bearer token","X-Trace-ID":"trace-1"}`,
+	}
+	record := &model.TimerRecord{
+		RequestMethod: http.MethodPost,
+		RequestURL:    "http://example.test/callback",
+	}
+
+	status, _, err := executor.executeHTTPCallback(def, record)
+	if err != nil {
+		t.Fatalf("executeHTTPCallback returned error: %v", err)
+	}
+	if status != http.StatusOK {
+		t.Fatalf("response status = %d, want %d", status, http.StatusOK)
+	}
+	if authorization != "Bearer token" || traceID != "trace-1" || timerID != "42" {
+		t.Fatalf("headers = (%q, %q, %q), want configured and timer headers", authorization, traceID, timerID)
+	}
+}
+
+func TestExecuteHTTPCallbackRejectsMalformedStoredHeaders(t *testing.T) {
+	executor := &Executor{httpClient: &http.Client{}}
+	def := &model.TimerDefinition{CallbackHeaders: "not-json"}
+	record := &model.TimerRecord{
+		RequestMethod: http.MethodPost,
+		RequestURL:    "http://example.test",
+	}
+
+	_, _, err := executor.executeHTTPCallback(def, record)
+	if err == nil {
+		t.Fatal("executeHTTPCallback returned nil error for malformed stored headers")
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
 }

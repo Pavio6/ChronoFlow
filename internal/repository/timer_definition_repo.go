@@ -18,6 +18,8 @@ type TimerDefinitionRepository interface {
 	Delete(id int64) error
 	// List 分页查询定时器定义列表（支持应用名、状态、关键字过滤）
 	List(req *model.TimerDefinitionListRequest) ([]*model.TimerDefinition, int64, error)
+	// CountListByStatus 按列表筛选条件统计可见定时器状态
+	CountListByStatus(req *model.TimerDefinitionListRequest) (map[model.TimerStatus]int64, error)
 	// GetActiveDefinitions 获取所有激活状态的定时器定义
 	GetActiveDefinitions() ([]*model.TimerDefinition, error)
 	// UpdateStatus 更新定时器定义状态
@@ -114,6 +116,37 @@ func (r *timerDefinitionRepo) List(req *model.TimerDefinitionListRequest) ([]*mo
 	}
 
 	return items, total, nil
+}
+
+// CountListByStatus 按列表筛选条件统计未删除的定时器状态。
+func (r *timerDefinitionRepo) CountListByStatus(req *model.TimerDefinitionListRequest) (map[model.TimerStatus]int64, error) {
+	type row struct {
+		Status model.TimerStatus
+		Count  int64
+	}
+
+	query := r.db.Model(&model.TimerDefinition{}).Where("status != ?", model.TimerStatusDeleted)
+	if req.App != "" {
+		query = query.Where("app = ?", req.App)
+	}
+	if req.Status != "" {
+		query = query.Where("status = ?", req.Status)
+	}
+	if req.Keyword != "" {
+		keyword := "%" + req.Keyword + "%"
+		query = query.Where("name LIKE ? OR callback_url LIKE ?", keyword, keyword)
+	}
+
+	var rows []row
+	if err := query.Select("status, count(*) as count").Group("status").Find(&rows).Error; err != nil {
+		return nil, fmt.Errorf("统计定时器列表状态失败: %w", err)
+	}
+
+	result := make(map[model.TimerStatus]int64, len(rows))
+	for _, item := range rows {
+		result[item.Status] = item.Count
+	}
+	return result, nil
 }
 
 // GetActiveDefinitions 获取所有激活状态的定时器定义

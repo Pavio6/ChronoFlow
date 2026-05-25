@@ -38,6 +38,7 @@ func (h *TimerHandler) RegisterRoutes(r *gin.Engine) {
 		// 执行记录查询
 		api.GET("/timers/:id/records", h.GetTimerRecords)
 		api.GET("/records", h.ListRecords)
+		api.GET("/records/:id", h.GetRecord)
 	}
 }
 
@@ -260,6 +261,33 @@ func (h *TimerHandler) ListRecords(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code": http.StatusOK,
 		"data": resp,
+	})
+}
+
+// GetRecord 获取执行记录详情
+// GET /api/v1/records/:id
+func (h *TimerHandler) GetRecord(c *gin.Context) {
+	id, err := parseID(c, "id")
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"code":    http.StatusBadRequest,
+			"message": "无效的 ID",
+		})
+		return
+	}
+
+	record, err := h.timerSvc.GetRecord(id)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{
+			"code":    http.StatusNotFound,
+			"message": err.Error(),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"code": http.StatusOK,
+		"data": record,
 	})
 }
 

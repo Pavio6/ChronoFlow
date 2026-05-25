@@ -113,12 +113,23 @@ func (s *TimerService) List(req *model.TimerDefinitionListRequest) (*model.Timer
 	if err != nil {
 		return nil, fmt.Errorf("查询定时器列表失败: %w", err)
 	}
+	statusCounts, err := s.defRepo.CountListByStatus(req)
+	if err != nil {
+		return nil, fmt.Errorf("统计定时器状态失败: %w", err)
+	}
+	active := statusCounts[model.TimerStatusActive]
+	inactive := statusCounts[model.TimerStatusInactive]
 
 	return &model.TimerDefinitionListResponse{
 		Total:    total,
 		Page:     req.Page,
 		PageSize: req.PageSize,
 		Items:    items,
+		Stats: model.TimerDefinitionListStats{
+			Total:    active + inactive,
+			Active:   active,
+			Inactive: inactive,
+		},
 	}, nil
 }
 
@@ -239,6 +250,18 @@ func (s *TimerService) GetRecords(timerID int64, limit int) ([]*model.TimerRecor
 	return records, nil
 }
 
+// GetRecord 根据 ID 获取单条执行记录。
+func (s *TimerService) GetRecord(id int64) (*model.TimerRecord, error) {
+	record, err := s.recRepo.GetByID(id)
+	if err != nil {
+		return nil, fmt.Errorf("查询执行记录失败: %w", err)
+	}
+	if record == nil {
+		return nil, fmt.Errorf("执行记录不存在，id=%d", id)
+	}
+	return record, nil
+}
+
 // ListRecords 分页查询执行记录列表
 func (s *TimerService) ListRecords(req *model.RecordListRequest) (*model.RecordListResponse, error) {
 	// 设置默认分页参数
@@ -253,11 +276,26 @@ func (s *TimerService) ListRecords(req *model.RecordListRequest) (*model.RecordL
 	if err != nil {
 		return nil, fmt.Errorf("查询执行记录列表失败: %w", err)
 	}
+	statusCounts, err := s.recRepo.CountListByStatus(req)
+	if err != nil {
+		return nil, fmt.Errorf("统计执行记录状态失败: %w", err)
+	}
+	pending := statusCounts[model.RecordStatusPending]
+	running := statusCounts[model.RecordStatusRunning]
+	success := statusCounts[model.RecordStatusSuccess]
+	failed := statusCounts[model.RecordStatusFailed]
 
 	return &model.RecordListResponse{
 		Total:    total,
 		Page:     req.Page,
 		PageSize: req.PageSize,
 		Items:    items,
+		Stats: model.RecordListStats{
+			Total:   pending + running + success + failed,
+			Pending: pending,
+			Running: running,
+			Success: success,
+			Failed:  failed,
+		},
 	}, nil
 }

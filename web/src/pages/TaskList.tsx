@@ -40,11 +40,7 @@ const TaskList: React.FC = () => {
       const items = res.items || [];
       setTimers(items);
       setTotal(res.total);
-      setStats({
-        total: res.total,
-        active: items.filter(t => t.status === 'ACTIVE').length,
-        inactive: items.filter(t => t.status === 'INACTIVE').length,
-      });
+      setStats(res.stats);
     } catch (error: unknown) {
       message.error((error as Error).message || '加载失败');
     } finally {

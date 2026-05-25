@@ -43,6 +43,11 @@ export interface TimerListResponse {
   page: number;
   page_size: number;
   items: TimerDefinition[];
+  stats: {
+    total: number;
+    active: number;
+    inactive: number;
+  };
 }
 
 // 执行记录接口
@@ -70,6 +75,13 @@ export interface RecordListResponse {
   page: number;
   page_size: number;
   items: TimerRecord[];
+  stats: {
+    total: number;
+    pending: number;
+    running: number;
+    success: number;
+    failed: number;
+  };
 }
 
 // API 响应通用格式
@@ -126,4 +138,21 @@ export interface MonitoringSummary {
     last_collected_msg: string;
   };
   exporter: string;
+}
+
+export interface MonitoringPoint {
+  timestamp: number;
+  value: number;
+}
+
+export interface MonitoringHistory {
+  range_minutes: number;
+  step_seconds: number;
+  source: 'prometheus';
+  series: {
+    availability: MonitoringPoint[];
+    success_rate: MonitoringPoint[];
+    callback_p95_ms: MonitoringPoint[];
+    abnormal_records: MonitoringPoint[];
+  };
 }
