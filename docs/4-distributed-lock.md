@@ -75,16 +75,7 @@ Redis ZSet 中的任务在读取后仍然保留，以便进程异常后能够补
 UNIQUE KEY uk_timer_trigger_time (timer_id, trigger_time)
 ```
 
-Migrator 与激活流程的存在性检查会识别任意状态的既有记录，数据库唯一约束负责处理并发竞争下的最终一致性。
-
-已有数据库升级前需要先检查历史重复记录，再执行 `migrations/002_timer_records_unique_key.sql`：
-
-```sql
-SELECT timer_id, trigger_time, COUNT(*)
-FROM timer_records
-GROUP BY timer_id, trigger_time
-HAVING COUNT(*) > 1;
-```
+Migrator 与激活流程的存在性检查会识别任意状态的既有记录，数据库唯一约束负责处理并发竞争下的最终一致性。开发阶段该唯一键直接定义在 `migrations/001_init.sql` 中。
 
 ### 回调执行权
 
