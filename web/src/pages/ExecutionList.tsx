@@ -10,9 +10,11 @@ import {
   Modal,
   Descriptions,
   Empty,
+  Input,
 } from 'antd';
 import {
   ReloadOutlined,
+  SearchOutlined,
   EyeOutlined,
   CheckCircleOutlined,
   CloseCircleOutlined,
@@ -63,10 +65,15 @@ const ExecutionList: React.FC = () => {
   const columns: ColumnsType<TimerRecord> = [
     { title: 'ID', dataIndex: 'id', width: 72, render: (id: number) => <span className="muted">#{id}</span> },
     {
-      title: '定时器',
-      dataIndex: 'timer_id',
-      width: 80,
-      render: (id: number) => <span className="mono-chip">#{id}</span>,
+      title: '定时器名称',
+      dataIndex: 'timer_name',
+      width: 180,
+      ellipsis: true,
+      render: (name: string | undefined, record) => (
+        <Tooltip title={name || `#${record.timer_id}`}>
+          <span>{name || `#${record.timer_id}`}</span>
+        </Tooltip>
+      ),
     },
     {
       title: '触发时间',
@@ -147,12 +154,12 @@ const ExecutionList: React.FC = () => {
       <div className="surface">
         <div className="toolbar">
           <Space wrap>
-          <Select
-            placeholder="定时器ID"
-            className="toolbar-select"
+          <Input
+            placeholder="搜索定时器名称"
+            prefix={<SearchOutlined />}
+            className="toolbar-control"
             allowClear
-            showSearch
-            onChange={(v) => setParams({ ...params, timer_id: v, page: 1 })}
+            onChange={(e) => setParams({ ...params, timer_name: e.target.value, page: 1 })}
           />
           <Select
             placeholder="状态"
@@ -195,6 +202,7 @@ const ExecutionList: React.FC = () => {
         {selected && (
           <Descriptions bordered column={2} size="small">
             <Descriptions.Item label="ID">{selected.id}</Descriptions.Item>
+            <Descriptions.Item label="定时器名称">{selected.timer_name || '-'}</Descriptions.Item>
             <Descriptions.Item label="定时器ID">{selected.timer_id}</Descriptions.Item>
             <Descriptions.Item label="触发时间">
               {new Date(selected.trigger_time).toLocaleString('zh-CN')}

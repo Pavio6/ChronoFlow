@@ -125,7 +125,7 @@ POST /api/v1/timers/:id/deactivate
 ### 查询执行记录列表
 
 ```
-GET /api/v1/records?page=1&page_size=10&timer_id=1&status=SUCCESS
+GET /api/v1/records?page=1&page_size=10&timer_name=订单&status=SUCCESS
 ```
 
 **查询参数：**
@@ -134,10 +134,11 @@ GET /api/v1/records?page=1&page_size=10&timer_id=1&status=SUCCESS
 |------|------|------|
 | page | int | 页码 |
 | page_size | int | 每页数量 |
-| timer_id | int | 定时器 ID 过滤 |
+| timer_name | string | 定时器名称模糊过滤 |
+| timer_id | int | 定时器 ID 过滤（兼容保留） |
 | status | string | 状态过滤 |
 
-响应 `data.stats` 按当前列表筛选条件返回 `total`、`pending`、`running`、`success`、`failed` 聚合值，不受分页影响。
+响应条目包含 `timer_name`；`data.stats` 按当前列表筛选条件返回 `total`、`pending`、`running`、`success`、`failed` 聚合值，不受分页影响。列表默认按记录 ID 倒序返回，优先展示最新写入记录。
 
 ### 获取指定定时器的执行记录
 

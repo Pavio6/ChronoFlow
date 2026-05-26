@@ -20,6 +20,7 @@ const (
 type TimerRecord struct {
 	ID            int64        `gorm:"primaryKey;autoIncrement" json:"id"`
 	TimerID       int64        `gorm:"index;uniqueIndex:uk_timer_trigger_time;not null;comment:定时器ID" json:"timer_id"`
+	TimerName     string       `gorm:"column:timer_name;->;-:migration" json:"timer_name,omitempty"`
 	TriggerTime   time.Time    `gorm:"index;uniqueIndex:uk_timer_trigger_time;not null;comment:执行时间" json:"trigger_time"`
 	Status        RecordStatus `gorm:"size:32;not null;default:PENDING;comment:执行状态" json:"status"`
 	RequestURL    string       `gorm:"size:512;comment:请求URL" json:"request_url"`
@@ -48,10 +49,11 @@ func (r *TimerRecord) IsCompleted() bool {
 
 // RecordListRequest 执行记录列表查询请求
 type RecordListRequest struct {
-	Page     int          `form:"page" binding:"min=1"`
-	PageSize int          `form:"page_size" binding:"min=1,max=100"`
-	TimerID  int64        `form:"timer_id"`
-	Status   RecordStatus `form:"status"`
+	Page      int          `form:"page" binding:"min=1"`
+	PageSize  int          `form:"page_size" binding:"min=1,max=100"`
+	TimerID   int64        `form:"timer_id"`
+	TimerName string       `form:"timer_name"`
+	Status    RecordStatus `form:"status"`
 }
 
 // RecordListResponse 执行记录列表查询响应

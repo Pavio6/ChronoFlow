@@ -2,6 +2,7 @@ package repository
 
 import (
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/chronoflow/internal/model"
@@ -43,6 +44,8 @@ type TimerRecordRepository interface {
 	CountPendingOverdue(before time.Time) (int64, error)
 	// CountRunningStale 统计开始时间已超过阈值但仍在运行的记录
 	CountRunningStale(before time.Time) (int64, error)
+	// CompletedDurationP95Milliseconds 返回已完成执行记录的 P95 耗时
+	CompletedDurationP95Milliseconds() (float64, error)
 }
 
 // timerRecordRepo 定时器执行记录仓库实现
@@ -80,7 +83,11 @@ func (r *timerRecordRepo) BatchCreate(records []*model.TimerRecord) error {
 // GetByID 根据 ID 获取执行记录
 func (r *timerRecordRepo) GetByID(id int64) (*model.TimerRecord, error) {
 	var record model.TimerRecord
-	err := r.db.Where("id = ?", id).First(&record).Error
+	err := r.db.Model(&model.TimerRecord{}).
+		Select("timer_records.*, timer_definitions.name AS timer_name").
+		Joins("LEFT JOIN timer_definitions ON timer_definitions.id = timer_records.timer_id").
+		Where("timer_records.id = ?", id).
+		First(&record).Error
 	if err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil
@@ -99,23 +106,12 @@ func (r *timerRecordRepo) Update(record *model.TimerRecord) error {
 }
 
 // List 分页查询执行记录列表
-// 支持按定时器 ID 和状态过滤
+// 支持按定时器名称、兼容的定时器 ID 和状态过滤
 func (r *timerRecordRepo) List(req *model.RecordListRequest) ([]*model.TimerRecord, int64, error) {
 	var items []*model.TimerRecord
 	var total int64
 
-	// 构建基础查询
-	query := r.db.Model(&model.TimerRecord{})
-
-	// 按定时器 ID 过滤
-	if req.TimerID > 0 {
-		query = query.Where("timer_id = ?", req.TimerID)
-	}
-
-	// 按状态过滤
-	if req.Status != "" {
-		query = query.Where("status = ?", req.Status)
-	}
+	query := r.recordListQuery(req)
 
 	// 统计满足条件的总记录数
 	if err := query.Count(&total).Error; err != nil {
@@ -125,8 +121,10 @@ func (r *timerRecordRepo) List(req *model.RecordListRequest) ([]*model.TimerReco
 	// 计算分页偏移量
 	offset := (req.Page - 1) * req.PageSize
 
-	// 分页查询，按创建时间倒序排列
-	if err := query.Order("created_at DESC").
+	// 分页查询，按记录 ID 倒序排列，提供稳定且直观的执行流水顺序
+	if err := query.
+		Select("timer_records.*, timer_definitions.name AS timer_name").
+		Order("timer_records.id DESC").
 		Offset(offset).
 		Limit(req.PageSize).
 		Find(&items).Error; err != nil {
@@ -143,16 +141,13 @@ func (r *timerRecordRepo) CountListByStatus(req *model.RecordListRequest) (map[m
 		Count  int64
 	}
 
-	query := r.db.Model(&model.TimerRecord{})
-	if req.TimerID > 0 {
-		query = query.Where("timer_id = ?", req.TimerID)
-	}
-	if req.Status != "" {
-		query = query.Where("status = ?", req.Status)
-	}
+	query := r.recordListQuery(req)
 
 	var rows []row
-	if err := query.Select("status, count(*) as count").Group("status").Find(&rows).Error; err != nil {
+	if err := query.
+		Select("timer_records.status AS status, count(*) as count").
+		Group("timer_records.status").
+		Find(&rows).Error; err != nil {
 		return nil, fmt.Errorf("统计执行记录列表状态失败: %w", err)
 	}
 
@@ -163,12 +158,30 @@ func (r *timerRecordRepo) CountListByStatus(req *model.RecordListRequest) (map[m
 	return result, nil
 }
 
+func (r *timerRecordRepo) recordListQuery(req *model.RecordListRequest) *gorm.DB {
+	query := r.db.Model(&model.TimerRecord{}).
+		Joins("LEFT JOIN timer_definitions ON timer_definitions.id = timer_records.timer_id")
+	if req.TimerID > 0 {
+		query = query.Where("timer_records.timer_id = ?", req.TimerID)
+	}
+	if req.TimerName != "" {
+		query = query.Where("timer_definitions.name LIKE ?", "%"+req.TimerName+"%")
+	}
+	if req.Status != "" {
+		query = query.Where("timer_records.status = ?", req.Status)
+	}
+	return query
+}
+
 // GetByTimerID 根据定时器 ID 获取最近的执行记录
 // 按触发时间倒序返回指定条数的记录
 func (r *timerRecordRepo) GetByTimerID(timerID int64, limit int) ([]*model.TimerRecord, error) {
 	var items []*model.TimerRecord
-	err := r.db.Where("timer_id = ?", timerID).
-		Order("trigger_time DESC").
+	err := r.db.Model(&model.TimerRecord{}).
+		Select("timer_records.*, timer_definitions.name AS timer_name").
+		Joins("LEFT JOIN timer_definitions ON timer_definitions.id = timer_records.timer_id").
+		Where("timer_records.timer_id = ?", timerID).
+		Order("timer_records.trigger_time DESC").
 		Limit(limit).
 		Find(&items).Error
 	if err != nil {
@@ -318,4 +331,25 @@ func (r *timerRecordRepo) CountRunningStale(before time.Time) (int64, error) {
 		return 0, fmt.Errorf("统计卡住执行记录失败: %w", err)
 	}
 	return count, nil
+}
+
+// CompletedDurationP95Milliseconds 返回 SUCCESS/FAILED 执行记录的 P95 耗时。
+func (r *timerRecordRepo) CompletedDurationP95Milliseconds() (float64, error) {
+	query := r.db.Model(&model.TimerRecord{}).
+		Where("status IN ? AND duration > 0", []model.RecordStatus{model.RecordStatusSuccess, model.RecordStatusFailed})
+
+	var count int64
+	if err := query.Count(&count).Error; err != nil {
+		return 0, fmt.Errorf("统计已完成执行耗时数量失败: %w", err)
+	}
+	if count == 0 {
+		return 0, nil
+	}
+
+	offset := int(math.Ceil(float64(count)*0.95)) - 1
+	var duration int64
+	if err := query.Select("duration").Order("duration ASC").Offset(offset).Limit(1).Scan(&duration).Error; err != nil {
+		return 0, fmt.Errorf("查询已完成执行 P95 耗时失败: %w", err)
+	}
+	return float64(duration), nil
 }
