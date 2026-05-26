@@ -123,7 +123,7 @@ for _, def := range activeDefinitions {
 }
 ```
 
-### Scheduler → Trigger → Executor 协程池通信
+### Scheduler → Trigger → Executor 双协程池通信
 
 ```go
 // Scheduler：提交 worker；worker 内抢锁并运行 Trigger（同时处理当前分钟和上一分钟）
@@ -132,7 +132,7 @@ prevBucketNum, _ := queue.GetBucketNum(ctx, prevTimeRange, defaultBucketNum)
 lockExpiration := time.Duration(cfg.LockExpiration) * time.Second // 默认 70s
 
 for bucket := 0; bucket < currentBucketNum; bucket++ {
-    pool.Submit(func() {
+    schedulerPool.Submit(func() {
         lock := queue.NewSchedulerLock(currentTimeRange, bucket) // token = processID_goroutineID
         if acquired, _ := lock.Lock(ctx, lockExpiration); acquired {
             trigger.Run(ctx, currentTimeRange, bucket, currentBucketNum, lock)
@@ -140,7 +140,7 @@ for bucket := 0; bucket < currentBucketNum; bucket++ {
     })
 }
 for bucket := 0; bucket < prevBucketNum; bucket++ {
-    pool.Submit(func() {
+    schedulerPool.Submit(func() {
         lock := queue.NewSchedulerLock(prevTimeRange, bucket)
         if acquired, _ := lock.Lock(ctx, lockExpiration); acquired {
             trigger.Run(ctx, prevTimeRange, bucket, prevBucketNum, lock)
@@ -155,13 +155,12 @@ for cursor.Before(sliceEnd) {
     dueEnd := min(nextWholeSecond(time.Now()), sliceEnd)
     if !cursor.Before(dueEnd) { continue }
     triggers, _ := queue.GetTasksByTime(ctx, timeRange, bucket, cursor, dueEnd)
-    // 每个窗口合并已有 MySQL PENDING 记录（Redis 部分失败兜底）
-    if len(triggers) == 0 {
-        triggers, _ = recRepo.GetPendingByTimeRange(cursor, dueEnd)
-        // 按 bucket 过滤: timer_id % bucketNum == bucket
-    }
+    // 每个窗口始终合并已有 MySQL PENDING 记录（Redis 部分失败兜底）
+    dbTriggers, _ := recRepo.GetPendingByTimeRange(cursor, dueEnd)
+    // 过滤 DB 结果: timer_id % bucketNum == bucket
+    triggers = mergeTaskTriggers(triggers, filterBucket(dbTriggers, bucket, bucketNum))
     for _, t := range triggers {
-        pool.Submit(func() {
+        triggerPool.Submit(func() {
             executor.Execute(ctx, t)
         })
     }
@@ -169,6 +168,8 @@ for cursor.Before(sliceEnd) {
 }
 lock.Extend(ctx, successExpiration) // Lua 校验 token 后设置完整扫描成功后的保留 TTL
 ```
+
+`schedulerPool` 仅负责分片扫描与 Trigger 运行，`triggerPool` 承载 Executor HTTP 回调；Executor 使用固定 `12s` HTTP 超时限制异常下游占用执行 worker 的时间。
 
 ### 数据库原子执行抢占
 

@@ -7,7 +7,7 @@
 ```
 用户创建定时器 → 激活 → Migrator 预创建任务 → Redis 入队
      ↓
-Scheduler 轮询 → 抢锁 → Trigger 读取任务 → Executor 执行
+Scheduler 轮询 → `[schedulerPool]` 抢锁/Trigger 扫描 → `[triggerPool]` Executor 执行 → `[12s timeout]` HTTP 回调
      ↓
 执行完成 → 更新记录 → 设置幂等标记
 ```
@@ -191,7 +191,7 @@ Trigger.Run()
     ↓
     合并已有 MySQL PENDING 记录（Redis 部分失败兜底）
     ↓
-    提交 Executor 到协程池，并推进 cursor
+    提交 Executor 到 triggerPool，并推进 cursor
     ↓
 完整扫描成功后，Lua 校验 token 并将锁 TTL 设为 success_expiration（默认 130s）
 ```
@@ -216,7 +216,7 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
         triggers = mergeTaskTriggers(triggers, dbTriggers)
         
         for _, trigger := range triggers {
-            t.pool.Submit(func() {
+            t.triggerPool.Submit(func() {
                 t.executor.Execute(ctx, trigger)
             })
         }
@@ -243,7 +243,7 @@ Bloom Filter 快速查询；命中后 MySQL 确认已处理则跳过
     ↓ 更新行数为 0：跳过
 获得执行权
     ↓
-执行 HTTP 回调
+使用固定 12s 超时执行 HTTP 回调
     ↓
 更新状态: RUNNING → SUCCESS/FAILED
     ↓

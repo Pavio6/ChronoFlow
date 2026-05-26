@@ -10,7 +10,7 @@ chronoflow:scheduler_lock:{YYYY-MM-DD-HH:mm}:{bucket}
 
 ### 获取与所有权
 
-Scheduler 先将分片处理提交到 worker pool；处理该分片的 worker 创建锁对象，并使用 `GetProcessAndGoroutineIDStr()` 生成 token：
+Scheduler 先将分片处理提交到独立的 `schedulerPool`；处理该分片的 worker 创建锁对象，并使用 `GetProcessAndGoroutineIDStr()` 生成 token：
 
 ```go
 lock := queue.NewSchedulerLock(timeRange, bucket) // token = processID_goroutineID
@@ -37,7 +37,7 @@ return 0
 Scheduler 取得分片锁，初始 TTL = 70s
     |
     v
-Trigger 以不重叠窗口扫描完整分钟分片，并提交 Executor
+Trigger 以不重叠窗口扫描完整分钟分片，并向 triggerPool 提交 Executor
     |
     v
 扫描无错误完成后，Lua 校验 token，将 TTL 重置为 130s
@@ -48,7 +48,8 @@ Trigger 以不重叠窗口扫描完整分钟分片，并提交 Executor
 
 - `lock_expiration = 70s`：覆盖 60 秒分片处理，并保留调度余量。
 - `success_expiration = 130s`：分片派发成功后的保留租约，覆盖上一分钟回扫窗口。
-- `130s` 不表示任务执行期间一直持锁；Executor 的 HTTP 回调是异步执行的。
+- `130s` 不表示任务执行期间一直持锁；Executor 的 HTTP 回调由独立 `triggerPool` 异步执行。
+- `triggerPool` 中的 HTTP 回调固定超时为 `12s`，不会无限期占用回调执行 worker。
 
 ## 派发防重
 
@@ -91,6 +92,8 @@ WHERE timer_id = ? AND trigger_time = ? AND status = 'PENDING';
 - `RowsAffected = 0`：任务已被其他 Executor 领取或已完成，直接跳过。
 
 因此，即使一个 ZSet member 因故障恢复而被重复派发，也只有一个 Executor 能从数据库获得执行许可。
+
+获得执行权后，Executor 使用固定 `12s` 超时发送 HTTP 回调。下游超过该时限仍未完成时，记录会更新为 `FAILED`；该超时不改变分片锁的扫描和续期语义。
 
 ### Bloom Filter
 

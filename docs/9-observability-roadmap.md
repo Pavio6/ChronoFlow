@@ -76,6 +76,7 @@ MVP 约束：
 
 1. 回调完成后上报 `result="success"` 或 `result="failed"`。
 2. 以秒记录 callback 执行耗时。
+3. 固定 `12s` HTTP 超时产生的失败同样计入失败回调与执行耗时指标。
 
 ### Step 2：增加一个轻量状态采集循环
 
@@ -276,7 +277,7 @@ docker compose up -d mysql redis chronoflow prometheus grafana
 ### 必须通过的检查
 
 1. Prometheus `Targets` 页面显示 `chronoflow` 为 `UP`。
-2. 触发一次成功和一次失败回调后，Grafana 能显示速率、成功率与延迟数据。
+2. 触发一次成功、一次失败和一次超过 `12s` 的超时回调后，Grafana 能显示速率、成功率与延迟数据。
 3. 创建超期 `PENDING` 记录后，dashboard 显示非零值并触发告警。
 4. 创建超时 `RUNNING` 记录后，dashboard 显示非零值并触发告警。
 5. 刷新 ChronoFlow 管理页面或重启后端后，Grafana 历史曲线仍保留。

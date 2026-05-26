@@ -15,12 +15,13 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 │    TimerService (CRUD) + 状态机                   │
 ├─────────────────────────────────────────────────┤
 │                  调度引擎层                        │
-│  Migrator → Scheduler → Trigger → Executor       │
+│  Migrator                                        │
+│  Scheduler →[扫描池] Trigger →[执行池] Executor   │
 ├─────────────────────────────────────────────────┤
 │                  基础设施层                        │
 │  Cron Parser | Bloom Filter | Memory Cache       │
 │  Redis Queue | Metrics                           │
-│  Worker Pool (ants)                               │
+│  Scheduler Pool | Trigger Pool (ants)             │
 ├─────────────────────────────────────────────────┤
 │                  数据存储层                        │
 │       MySQL (持久化) + Redis (队列) + Memory (缓存)│
@@ -57,7 +58,7 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 1. 计算当前分钟级时间范围 `time_range = YYYY-MM-DD-HH:mm`
 2. 同时处理当前分钟和上一分钟，避免边界任务遗漏
 3. 分别获取各分钟的动态分桶数（不同分钟可能不同）
-4. 对每个桶向 ants 协程池提交分片处理 worker
+4. 对每个桶向 `schedulerPool` 提交分片处理 worker
 5. worker 以 `processID_goroutineID` token 执行 `SET NX` 抢锁，TTL = `lock_expiration`（默认 70 秒）
 6. 抢到锁 → 在同一 worker 中运行 Trigger
 
@@ -100,13 +101,13 @@ Scheduler 每次轮询都会为有任务的分片提交 worker 尝试抢锁，�
 
 ### 3. Trigger（触发器）
 
-**职责**：在时间片内持续轮询 Redis ZSet，读取到期任务提交 Executor。每个扫描窗口同时合并已经存在的 MySQL PENDING 记录，覆盖 Redis 部分投递失败。
+**职责**：在时间片内持续轮询 Redis ZSet，读取到期任务并向独立的 `triggerPool` 提交 Executor。每个扫描窗口同时合并已经存在的 MySQL PENDING 记录，覆盖 Redis 部分投递失败。
 
 **核心流程**：
 1. 计算分钟半开区间 `[sliceStart, sliceEnd)`
 2. 以游标循环调用 `GetTasksByTime(cursor, dueEnd)`，每个扫描窗口互不重叠
 3. 查询同一扫描窗口中 `status = PENDING` 的 MySQL 记录，并与 Redis 结果按触发点去重合并
-4. 对每个到期任务，从协程池提交 Executor 协程
+4. 对每个到期任务，从 `triggerPool` 提交 Executor 协程
 5. 完整扫描分片后，通过 Lua 校验 owner token 并将锁 TTL 设置为 `success_expiration`
 
 **时间片结束**：每个 Trigger 负责处理一分钟内某个桶的任务，`10:30` 时间片表示 `[10:30:00, 10:31:00)`。如果 Scheduler 在下一分钟补扫该分片，Trigger 会立即处理尚未完成的整个历史区间。
@@ -124,7 +125,7 @@ Scheduler 每次轮询都会为有任务的分片提交 worker 尝试抢锁，�
 2. 查询完整的定时器定义（先内存缓存，miss 再 MySQL）
 3. 使用定义中的状态判断是否执行（INACTIVE/DELETED 则跳过）
 4. 以条件更新原子抢占 `PENDING -> RUNNING`；抢占失败直接跳过
-5. 执行 HTTP 回调
+5. 通过固定 `12s` 超时的 HTTP client 执行回调；超时按失败处理
 6. 根据结果更新状态（SUCCESS/FAILED）
 7. 执行成功 → Bloom Filter 打点，为后续重复派发提供快速过滤
 
@@ -175,6 +176,7 @@ ChronoFlow 选择 ants 协程池，因为：
 1. 模块间通信在同一进程内完成，无需跨进程
 2. 减少 IO 交互，延迟更低
 3. 降低外部依赖，仅需 MySQL + Redis
+4. Scheduler 扫描池和 Trigger 回调池独立限流，慢回调不会直接占用分片扫描 worker
 
 ### 为什么用三级存储？
 

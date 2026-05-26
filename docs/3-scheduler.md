@@ -2,10 +2,12 @@
 
 ## 模块概览
 
-调度引擎由四个模块组成，通过 ants 协程池串联：
+调度引擎由四个模块组成，其中执行主链路通过两个独立 ants 协程池隔离扫描和回调资源：
 
 ```
-Migrator ──[协程池]──→ Scheduler ──[协程池]──→ Trigger ──[协程池]──→ Executor
+Migrator
+
+Scheduler ──[schedulerPool]──→ Trigger ──[triggerPool]──→ Executor ──[12s timeout]──→ HTTP Callback
 ```
 
 ## Migrator 详解
@@ -98,7 +100,7 @@ bucket = timer_id % bucket_num
 
 - 每秒轮询一次
 - 计算当前时间范围
-- 对每个桶提交分片处理 worker
+- 对每个桶向 `schedulerPool` 提交分片处理 worker
 - worker 创建 token、抢到分布式锁后运行 Trigger
 
 ### 执行流程
@@ -129,7 +131,7 @@ func (s *Scheduler) schedule(ctx context.Context) {
 }
 
 func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket int, bucketNum int, lockExpiration time.Duration) {
-    s.pool.Submit(func() {
+    s.schedulerPool.Submit(func() {
         lock := s.queue.NewSchedulerLock(timeRange, bucket)
         acquired, _ := lock.Lock(ctx, lockExpiration)
         if acquired {
@@ -161,7 +163,7 @@ func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket in
 - 用不重叠扫描窗口读取到期任务，避免一次 Trigger 重复派发同一 member
 - 扫描成功后保留锁 TTL，覆盖上一分钟回扫
 - 每个窗口合并已有 MySQL PENDING 记录（Redis 部分投递失败兜底）
-- 提交 Executor 到协程池
+- 提交 Executor 到独立的 `triggerPool`
 
 ### 执行流程
 
@@ -183,7 +185,7 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
         
         // 提交 Executor
         for _, trigger := range triggers {
-            t.pool.Submit(func() {
+            t.triggerPool.Submit(func() {
                 t.executor.Execute(ctx, trigger)
             })
         }
@@ -230,6 +232,7 @@ func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucke
 - 通过数据库原子状态抢占取得最终执行权
 - 查询定时器定义
 - 执行 HTTP 回调
+- HTTP 回调客户端固定 `12s` 超时，超时任务更新为 FAILED
 - 更新执行记录状态
 
 ### 执行流程
@@ -251,7 +254,7 @@ func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucke
    ├─ PENDING -> RUNNING 更新成功 → 获得回调执行权
    └─ 更新行数为 0 → 已被领取或完成，跳过
 
-5. 执行 HTTP 回调
+5. 使用固定 `12s` 超时执行 HTTP 回调
    ├─ 成功 → 记录 response_code/response_body
    └─ 失败 → 标记为 FAILED
 
@@ -269,13 +272,13 @@ func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucke
 Migrator ──[MySQL]──> timer_records ──[Redis ZSet]──> Scheduler
                                                       │
                                                       ▼
-                                                  [协程池]
+                                             [schedulerPool]
                                                       │
                                                       ▼
                                                   Trigger
                                                       │
                                                       ▼
-                                                  [协程池]
+                                               [triggerPool]
                                                       │
                                                       ▼
                                                   Executor
@@ -284,7 +287,8 @@ Migrator ──[MySQL]──> timer_records ──[Redis ZSet]──> Scheduler
                                                   [HTTP 回调]
 ```
 
-所有模块通过 ants 协程池通信，而非传统的 channel 或 MQ。这样做的好处：
+Scheduler 与 Trigger、Trigger 与 Executor 之间使用各自的 ants 协程池通信，而非传统的 channel 或 MQ；Migrator 独立生成并投递记录。这样做的好处：
 1. 零额外依赖（不需要 Kafka/Pulsar）
 2. 低延迟（进程内通信）
 3. 可控并发（协程池大小限制）
+4. 慢 HTTP 回调不直接占用 Scheduler 的分片扫描 worker

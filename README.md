@@ -11,42 +11,26 @@ ChronoFlow 是一个使用 Go 实现的定时任务调度服务。用户定义 C
 - **监控面板**：展示执行状态分布、P95 执行耗时趋势、异常任务趋势和 Redis 队列状态；耗时与异常趋势支持按时间点悬浮查看值，右上角展示最新值。
 - **可观测性**：服务暴露 Prometheus 指标，管理端通过后端查询 Prometheus 历史数据；Docker Compose 提供 Prometheus 和 Grafana 运行环境。
 
-## 界面展示
-
-### 任务管理
-
-[![任务管理界面](./images/任务管理.png)](./images/任务管理.png)
-
-### 执行记录
-
-[![执行记录界面](./images/执行记录.png)](./images/执行记录.png)
-
-### 监控面板
-
-[![监控面板界面](./images/监控面板.png)](./images/监控面板.png)
-
 ## 核心设计
 
-### 数据与调度链路
+### 调度执行引擎架构
 
-```mermaid
-flowchart LR
-    UI["React 管理端"] --> API["Gin API"]
-    API --> MySQL["MySQL<br/>任务定义 / 执行记录"]
-    API --> Redis["Redis<br/>分钟分片队列 / 锁"]
-    Migrator["Migrator"] --> MySQL
-    Migrator --> Redis
-    Scheduler["Scheduler"] --> Redis
-    Scheduler --> Trigger["Trigger"]
-    Trigger --> Redis
-    Trigger --> MySQL
-    Trigger --> Executor["Executor"]
-    Executor --> Callback["HTTP Callback"]
-    Executor --> MySQL
-    Executor --> Redis
-    Metrics["/metrics"] --> Prometheus["Prometheus"]
-    Prometheus --> API
+ChronoFlow 的调度执行引擎由一个独立的 `Migrator`、`Scheduler`、`Trigger`、`Executor` 三个执行模块，以及两个独立的 `ants` 协程池组成：
+
+```text
+Migrator
+
+Scheduler --[schedulerPool]--> Trigger --[triggerPool]--> Executor --[12s timeout]--> HTTP Callback
 ```
+
+| 组件 | 功能 |
+| --- | --- |
+| `Migrator` | 独立扫描激活任务，预生成未来窗口内的 `PENDING` 执行记录，并投递到 Redis 分片队列。 |
+| `Scheduler` | 扫描当前分钟和上一分钟分片，竞争 Redis 分片锁，并在取得锁后运行 `Trigger`。 |
+| `schedulerPool` | 承载分片扫描、锁竞争与 `Trigger.Run`。 |
+| `Trigger` | 在时间片内读取 Redis 到期任务，并将任务提交执行。 |
+| `triggerPool` | 承载 `Executor.Execute` 与 HTTP 回调期间的并发占用。 |
+| `Executor` | 原子抢占执行权，发起 HTTP 回调，随后更新执行结果和指标。 |
 
 ### 调度模型
 
@@ -54,7 +38,8 @@ flowchart LR
 2. Migrator 周期性扫描 `ACTIVE` 任务，为后续窗口创建执行记录并投递到 Redis。
 3. Redis 使用分钟级 ZSet 队列，按投递规模在配置上限内动态增加桶数；Scheduler 扫描当前分钟和上一分钟的各个桶。
 4. 多个服务实例通过 Redis `SET NX` 分片锁竞争调度权；Trigger 同时合并 MySQL 中的 `PENDING` 记录，补偿 Redis 投递不完整的情况。
-5. Executor 只有在原子抢占执行记录成功后才发送 HTTP 请求，并将结果更新为 `SUCCESS` 或 `FAILED`。
+5. Scheduler 的分片扫描池与 Trigger 的回调执行池彼此隔离，慢回调不占用调度扫描 worker。
+6. Executor 只有在原子抢占执行记录成功后才发送 HTTP 请求；HTTP 客户端采用固定 `12s` 超时，并将结果更新为 `SUCCESS` 或 `FAILED`。
 
 ### 状态模型
 
@@ -73,6 +58,20 @@ PENDING --> RUNNING --> SUCCESS | FAILED
 ```
 
 任务定义创建后没有编辑接口；需要调整 Cron 或回调参数时，创建新的任务定义。
+
+## 界面展示
+
+### 任务管理
+
+[![任务管理界面](./images/任务管理.png)](./images/任务管理.png)
+
+### 执行记录
+
+[![执行记录界面](./images/执行记录.png)](./images/执行记录.png)
+
+### 监控面板
+
+[![监控面板界面](./images/监控面板.png)](./images/监控面板.png)
 
 ## 技术栈
 
@@ -139,7 +138,7 @@ make test-callback
 | 路径 | 行为 |
 | --- | --- |
 | `/callback/success` | 返回成功响应 |
-| `/callback/slow` | 延迟 10 秒后返回成功响应 |
+| `/callback/slow` | 延迟 10 秒后返回成功响应|
 | `/callback/error` | 返回 HTTP 500 |
 | `/stats` | 返回各回调的调用次数 |
 
@@ -170,7 +169,8 @@ make test-callback
 | `scheduler.bucket_num` | `3` | 每分钟动态扩桶上限 |
 | `scheduler.tasks_per_bucket` | `100` | 每桶目标投递数量 |
 | `scheduler.scan_interval` | `1` | Scheduler 扫描间隔（秒） |
-| `executor.worker_pool_size` | `100` | 调度与执行共享协程池大小 |
+| `scheduler.worker_pool_size` | `16` | 分片扫描协程池大小 |
+| `trigger.worker_pool_size` | `100` | HTTP 回调执行协程池大小 |
 | `monitoring.collect_interval_seconds` | `10` | 当前状态指标采集间隔（秒） |
 | `monitoring.pending_overdue_seconds` | `120` | 等待执行异常阈值（秒） |
 | `monitoring.running_stale_seconds` | `60` | 执行中异常阈值（秒） |

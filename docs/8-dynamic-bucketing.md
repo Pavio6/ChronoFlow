@@ -42,6 +42,10 @@ scheduler:
   bucket_num: 3
   tasks_per_bucket: 100
   bucket_metadata_ttl: 600
+  worker_pool_size: 16
+
+trigger:
+  worker_pool_size: 100
 ```
 
 | 配置项 | 含义 |
@@ -50,6 +54,8 @@ scheduler:
 | `bucket_num` | 单分钟动态扩桶上限 |
 | `tasks_per_bucket` | 每桶目标投递数量 |
 | `bucket_metadata_ttl` | 时间片结束后，队列和 metadata 继续保留的秒数 |
+| `scheduler.worker_pool_size` | 分片扫描与 Trigger 运行的并发容量 |
+| `trigger.worker_pool_size` | Executor HTTP 回调的并发容量 |
 
 桶数按累计新增任务数计算：
 
@@ -130,6 +136,8 @@ bucket metadata 不存在 -> 扫描 0 .. base_bucket_num-1
 
 扩桶只会增加新的独立分片锁，不会改变旧桶已有锁的语义。
 
+分片处理任务进入 `schedulerPool`，与 Trigger 提交 Executor 使用的 `triggerPool` 分离。动态扩桶增加调度扫描并行度时，慢 HTTP 回调不会直接占用分片扫描 worker。
+
 ## 8. MySQL 补偿与 Redis 部分失败
 
 任务记录先进入 MySQL，Redis 是执行加速索引。因此可能出现：
@@ -149,6 +157,8 @@ MySQL 中该桶对应的 PENDING 记录
 两者按照 `(timerID, triggerTime)` 合并去重，再提交 Executor。这样即使 Redis 仅写入了一部分任务，也不会因为 Redis 返回非空而跳过数据库中遗漏的 PENDING 任务。
 
 动态扩桶后，历史 Redis 任务可能保留在旧桶中，而 DB 补偿会按当前桶数路由。极端情况下同一个触发点可能从两个桶被提交，最终仍由 MySQL 的原子 `PENDING -> RUNNING` 抢占保证回调只执行一次。
+
+Executor 由 `triggerPool` 承载回调并发，HTTP 客户端固定超时为 `12s`；该资源隔离与超时设置不改变动态桶映射或 DB 补偿规则。
 
 ## 9. 与 xTimer 的差异
 
@@ -171,3 +181,5 @@ MySQL 中该桶对应的 PENDING 记录
 | 在线激活写入 | `internal/service/timer_service.go` |
 | Scheduler 读取分钟桶数 | `internal/service/scheduler.go` |
 | DB 部分投递补偿 | `internal/service/trigger.go` |
+| 调度池与执行池注入 | `cmd/server/main.go`, `internal/pkg/pool/pool.go` |
+| HTTP 回调超时 | `internal/service/executor.go` |
