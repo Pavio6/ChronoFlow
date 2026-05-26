@@ -25,8 +25,9 @@ scheduler:
   scan_interval: 1
   lock_expiration: 70
   success_expiration: 130
+  worker_pool_size: 16
 
-executor:
+trigger:
   worker_pool_size: 100
 
 monitoring:

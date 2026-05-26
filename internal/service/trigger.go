@@ -14,38 +14,38 @@ import (
 
 // Trigger 触发器
 // 被 Scheduler 启动后，在时间片内持续轮询 Redis ZSet
-// 读取到期任务后从协程池提交 Executor 协程执行
+// 读取到期任务后从 triggerPool 提交 Executor 协程执行
 // 核心流程：
 //  1. 在时间片内持续轮询 Redis ZSet {time_range}:{bucket}
 //  2. 以不重叠的 [cursor, dueEnd) 时间窗口读取到期任务
 //  3. 分片扫描成功后将锁保留 success_expiration，抑制上一分钟回扫重入
 //  4. 每个窗口合并 MySQL PENDING 记录，覆盖 Redis 部分投递失败
-//  5. 从协程池提交 Executor 协程执行每个任务
+//  5. 从 triggerPool 提交 Executor 协程执行每个任务
 //
 // 防重复机制：窗口游标避免单次扫描重复派发，Executor 原子状态抢占负责最终防重
 // DB 补偿：MySQL 是事实来源，Trigger 合并已有 PENDING 记录以覆盖 Redis 缓存不完整
 type Trigger struct {
-	queue    *redis.RedisQueue
-	pool     *pool.GoWorkerPool
-	executor *Executor
-	recRepo  repository.TimerRecordRepository
-	cfg      *config.SchedulerConfig
+	queue       *redis.RedisQueue
+	triggerPool pool.WorkerPool
+	executor    *Executor
+	recRepo     repository.TimerRecordRepository
+	cfg         *config.SchedulerConfig
 }
 
 // NewTrigger 创建触发器实例
 func NewTrigger(
 	queue *redis.RedisQueue,
-	pool *pool.GoWorkerPool,
+	triggerPool pool.WorkerPool,
 	executor *Executor,
 	recRepo repository.TimerRecordRepository,
 	cfg *config.SchedulerConfig,
 ) *Trigger {
 	return &Trigger{
-		queue:    queue,
-		pool:     pool,
-		executor: executor,
-		recRepo:  recRepo,
-		cfg:      cfg,
+		queue:       queue,
+		triggerPool: triggerPool,
+		executor:    executor,
+		recRepo:     recRepo,
+		cfg:         cfg,
 	}
 }
 
@@ -54,7 +54,7 @@ func NewTrigger(
 // bucket: 桶号
 // bucketNum: 总桶数（用于 DB 补偿时按 timer_id % bucketNum 过滤）
 // lock: Scheduler worker 获取的、带所有者 token 的分片锁
-// 此方法由 Scheduler 通过协程池调用
+// 此方法由 Scheduler 通过 schedulerPool 调用
 func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketNum int, lock *redis.SchedulerLock) {
 	start := time.Now()
 	logger.Debug("Trigger 开始处理",
@@ -130,12 +130,12 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
 			// 为每个到期任务提交 Executor 协程
 			for _, trigger := range triggers {
 				triggerCopy := trigger // 捕获循环变量
-				err := t.pool.Submit(func() {
+				err := t.triggerPool.Submit(func() {
 					t.executor.Execute(ctx, triggerCopy)
 				})
 				if err != nil {
 					completed = false
-					logger.Error("Trigger 提交 Executor 到协程池失败",
+					logger.Error("Trigger 提交 Executor 到执行协程池失败",
 						zap.Int64("timer_id", triggerCopy.TimerID),
 						zap.Error(err),
 					)

@@ -12,7 +12,7 @@ type Config struct {
 	Database   DatabaseConfig   `mapstructure:"database"`
 	Redis      RedisConfig      `mapstructure:"redis"`
 	Scheduler  SchedulerConfig  `mapstructure:"scheduler"`
-	Executor   ExecutorConfig   `mapstructure:"executor"`
+	Trigger    TriggerConfig    `mapstructure:"trigger"`
 	Monitoring MonitoringConfig `mapstructure:"monitoring"`
 	Log        LogConfig        `mapstructure:"log"`
 }
@@ -50,6 +50,7 @@ type RedisConfig struct {
 // scan_interval: Scheduler 轮询间隔（秒）
 // lock_expiration: 分布式锁初始 TTL（秒），必须大于时间片时长（60 秒）
 // success_expiration: 分片扫描成功后的锁保留 TTL（秒），覆盖上一分钟回扫窗口
+// worker_pool_size: Scheduler 分片扫描协程池大小
 type SchedulerConfig struct {
 	MigrateStepMinutes int `mapstructure:"migrate_step_minutes"`
 	Step2Duration      int `mapstructure:"step2_duration"`
@@ -60,11 +61,12 @@ type SchedulerConfig struct {
 	ScanInterval       int `mapstructure:"scan_interval"`
 	LockExpiration     int `mapstructure:"lock_expiration"`
 	SuccessExpiration  int `mapstructure:"success_expiration"`
+	WorkerPoolSize     int `mapstructure:"worker_pool_size"`
 }
 
-// ExecutorConfig 执行器配置
-type ExecutorConfig struct {
-	WorkerPoolSize int `mapstructure:"worker_pool_size"` // 协程池大小
+// TriggerConfig 触发器配置，控制 Executor HTTP 回调执行并发
+type TriggerConfig struct {
+	WorkerPoolSize int `mapstructure:"worker_pool_size"`
 }
 
 // MonitoringConfig controls periodic collection of health gauges.
@@ -109,6 +111,7 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 	normalizeSchedulerConfig(&cfg.Scheduler)
+	normalizeTriggerConfig(&cfg.Trigger)
 	normalizeMonitoringConfig(&cfg.Monitoring)
 
 	AppConfig = cfg
@@ -127,6 +130,15 @@ func normalizeSchedulerConfig(cfg *SchedulerConfig) {
 	}
 	if cfg.BucketMetadataTTL < 1 {
 		cfg.BucketMetadataTTL = 600
+	}
+	if cfg.WorkerPoolSize < 1 {
+		cfg.WorkerPoolSize = 16
+	}
+}
+
+func normalizeTriggerConfig(cfg *TriggerConfig) {
+	if cfg.WorkerPoolSize < 1 {
+		cfg.WorkerPoolSize = 100
 	}
 }
 
@@ -173,9 +185,10 @@ func setDefaults() {
 	viper.SetDefault("scheduler.scan_interval", 1)         // 1 秒
 	viper.SetDefault("scheduler.lock_expiration", 70)      // 70 秒
 	viper.SetDefault("scheduler.success_expiration", 130)  // 130 秒，分片成功扫描后的保留 TTL
+	viper.SetDefault("scheduler.worker_pool_size", 16)     // 分片扫描并发
 
-	// 执行器默认配置
-	viper.SetDefault("executor.worker_pool_size", 100)
+	// 触发器默认配置
+	viper.SetDefault("trigger.worker_pool_size", 100) // HTTP 回调并发
 
 	// 可观测性采集默认配置
 	viper.SetDefault("monitoring.collect_interval_seconds", 10)

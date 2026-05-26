@@ -82,12 +82,21 @@ func main() {
 	recRepo := repository.NewTimerRecordRepository(repository.DB)
 
 	// ========== 7. 初始化协程池 ==========
-	workerPool, err := pool.NewGoWorkerPool(cfg.Executor.WorkerPoolSize)
+	schedulerPool, err := pool.NewGoWorkerPool(cfg.Scheduler.WorkerPoolSize)
 	if err != nil {
-		logger.Fatal("创建协程池失败", zap.Error(err))
+		logger.Fatal("创建调度协程池失败", zap.Error(err))
 	}
-	defer workerPool.Release()
-	logger.Info("协程池创建成功", zap.Int("size", cfg.Executor.WorkerPoolSize))
+	defer schedulerPool.Release()
+
+	triggerPool, err := pool.NewGoWorkerPool(cfg.Trigger.WorkerPoolSize)
+	if err != nil {
+		logger.Fatal("创建执行协程池失败", zap.Error(err))
+	}
+	defer triggerPool.Release()
+	logger.Info("协程池创建成功",
+		zap.Int("scheduler_pool_size", cfg.Scheduler.WorkerPoolSize),
+		zap.Int("trigger_pool_size", cfg.Trigger.WorkerPoolSize),
+	)
 
 	// ========== 8. 初始化服务层 ==========
 	// 执行器（Bloom 快速过滤，MySQL 条件状态更新授予唯一执行权）
@@ -97,10 +106,10 @@ func main() {
 	)
 
 	// 触发器（被 Scheduler 调用，DB 部分投递补偿需要 recRepo）
-	trigger := service.NewTrigger(queue, workerPool, executor, recRepo, &cfg.Scheduler)
+	trigger := service.NewTrigger(queue, triggerPool, executor, recRepo, &cfg.Scheduler)
 
 	// 调度器
-	scheduler := service.NewScheduler(queue, workerPool, trigger, recRepo, &cfg.Scheduler)
+	scheduler := service.NewScheduler(queue, schedulerPool, trigger, recRepo, &cfg.Scheduler)
 
 	// 迁移器
 	migrator := service.NewMigrator(defRepo, recRepo, queue, cronParser, &cfg.Scheduler)

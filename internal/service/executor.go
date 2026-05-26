@@ -19,6 +19,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const httpCallbackTimeout = 12 * time.Second
+
 // Executor 执行器
 // 被 Trigger 启动后，执行单个定时任务
 // 核心流程：
@@ -26,7 +28,7 @@ import (
 //  2. 查询完整的定时器定义（先内存缓存，miss 再 MySQL）
 //  3. 使用定义中的状态判断是否仍处于 ACTIVE；缓存状态允许在 TTL 内滞后
 //  4. 原子抢占执行记录：只有 PENDING -> RUNNING 成功的执行器继续
-//  5. 执行 HTTP 回调
+//  5. 使用固定 12 秒超时执行 HTTP 回调
 //  6. 执行成功后写 Bloom Filter，并更新 MySQL 最终状态
 type Executor struct {
 	defRepo    repository.TimerDefinitionRepository
@@ -53,14 +55,14 @@ func NewExecutor(
 		bloom:      bloom,
 		cache:      cache,
 		reporter:   reporter,
-		httpClient: &http.Client{},
+		httpClient: &http.Client{Timeout: httpCallbackTimeout},
 		cacheTTL:   cacheTTL,
 	}
 }
 
 // Execute 执行单个定时任务
 // trigger: 包含 TimerID 和 TriggerTime 的触发信息
-// 此方法由 Trigger 通过协程池调用
+// 此方法由 Trigger 通过 triggerPool 调用
 func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 	start := time.Now()
 	timerID := trigger.TimerID

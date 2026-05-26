@@ -15,36 +15,36 @@ import (
 
 // Scheduler 调度器
 // 每隔 scan_interval（默认 1 秒）轮询一次，为每个二维分片抢分布式锁
-// 将分片处理提交到协程池，由 worker 抢锁后运行 Trigger
+// 将分片处理提交到 schedulerPool，由 worker 抢锁后运行 Trigger
 // 核心流程：
 //  1. 计算当前分钟级时间范围 time_range
 //  2. 分别获取当前分钟和上一分钟的动态分桶数
-//  3. 对每个桶提交 worker 协程
+//  3. 对每个桶向 schedulerPool 提交 worker 协程
 //  4. worker 创建 owner token 并尝试 SETNX 抢锁，抢到后运行 Trigger
 type Scheduler struct {
-	queue   *redis.RedisQueue
-	pool    *pool.GoWorkerPool
-	trigger *Trigger
-	recRepo repository.TimerRecordRepository
-	cfg     *config.SchedulerConfig
-	quit    chan struct{}
+	queue         *redis.RedisQueue
+	schedulerPool pool.WorkerPool
+	trigger       *Trigger
+	recRepo       repository.TimerRecordRepository
+	cfg           *config.SchedulerConfig
+	quit          chan struct{}
 }
 
 // NewScheduler 创建调度器实例
 func NewScheduler(
 	queue *redis.RedisQueue,
-	pool *pool.GoWorkerPool,
+	schedulerPool pool.WorkerPool,
 	trigger *Trigger,
 	recRepo repository.TimerRecordRepository,
 	cfg *config.SchedulerConfig,
 ) *Scheduler {
 	return &Scheduler{
-		queue:   queue,
-		pool:    pool,
-		trigger: trigger,
-		recRepo: recRepo,
-		cfg:     cfg,
-		quit:    make(chan struct{}),
+		queue:         queue,
+		schedulerPool: schedulerPool,
+		trigger:       trigger,
+		recRepo:       recRepo,
+		cfg:           cfg,
+		quit:          make(chan struct{}),
 	}
 }
 
@@ -138,7 +138,7 @@ func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket in
 	// 与 xTimer 一致，在负责处理分片的 worker goroutine 内创建 token 并抢锁。
 	bucketCopy := bucket
 	timeRangeCopy := timeRange
-	err = s.pool.Submit(func() {
+	err = s.schedulerPool.Submit(func() {
 		lock := s.queue.NewSchedulerLock(timeRangeCopy, bucketCopy)
 		acquired, lockErr := lock.Lock(ctx, lockExpiration)
 		if lockErr != nil {
@@ -155,7 +155,7 @@ func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket in
 		s.trigger.Run(ctx, timeRangeCopy, bucketCopy, bucketNum, lock)
 	})
 	if err != nil {
-		logger.Error("Scheduler 提交 Trigger 到协程池失败",
+		logger.Error("Scheduler 提交 Trigger 到调度协程池失败",
 			zap.String("time_range", timeRangeCopy),
 			zap.Int("bucket", bucketCopy),
 			zap.Error(err),

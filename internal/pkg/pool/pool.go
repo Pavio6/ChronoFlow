@@ -7,6 +7,11 @@ import (
 	"github.com/panjf2000/ants/v2"
 )
 
+// WorkerPool exposes task submission for services and permits lightweight test doubles.
+type WorkerPool interface {
+	Submit(task func()) error
+}
+
 // GoWorkerPool 协程池，封装 ants 库
 // 用于限制并发 goroutine 数量，避免资源耗尽
 type GoWorkerPool struct {
@@ -26,7 +31,7 @@ func NewGoWorkerPool(size int) (*GoWorkerPool, error) {
 }
 
 // Submit 提交任务到协程池
-// 当池已满时返回错误
+// ants 默认使用阻塞提交语义；池满时等待空闲 worker，而不是丢弃任务。
 func (p *GoWorkerPool) Submit(task func()) error {
 	if err := p.pool.Submit(task); err != nil {
 		return fmt.Errorf("提交任务到协程池失败: %w", err)

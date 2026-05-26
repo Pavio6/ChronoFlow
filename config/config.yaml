@@ -37,9 +37,11 @@ scheduler:
   lock_expiration: 70
   # 分片扫描成功后的锁保留 TTL（秒），覆盖上一分钟回扫窗口
   success_expiration: 130
+  # 调度扫描协程池大小
+  worker_pool_size: 16
 
-executor:
-  # 协程池大小
+trigger:
+  # HTTP 回调执行协程池大小
   worker_pool_size: 100
 
 monitoring:
