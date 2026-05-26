@@ -54,6 +54,7 @@ export interface TimerListResponse {
 export interface TimerRecord {
   id: number;
   timer_id: number;
+  timer_name?: string;
   trigger_time: string;
   status: RecordStatus;
   request_url: string;
@@ -104,7 +105,7 @@ export interface TimerListParams {
 export interface RecordListParams {
   page?: number;
   page_size?: number;
-  timer_id?: number;
+  timer_name?: string;
   status?: RecordStatus;
 }
 
@@ -150,7 +151,6 @@ export interface MonitoringHistory {
   step_seconds: number;
   source: 'prometheus';
   series: {
-    availability: MonitoringPoint[];
     success_rate: MonitoringPoint[];
     callback_p95_ms: MonitoringPoint[];
     abnormal_records: MonitoringPoint[];

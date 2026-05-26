@@ -36,6 +36,10 @@ func (r *stubMonitorRecordRepo) CountRunningStale(before time.Time) (int64, erro
 	return 8, nil
 }
 
+func (r *stubMonitorRecordRepo) CompletedDurationP95Milliseconds() (float64, error) {
+	return 315.5, nil
+}
+
 type stubMonitorQueue struct{}
 
 func (stubMonitorQueue) Stats(context.Context) (redisqueue.QueueStats, error) {
@@ -57,6 +61,8 @@ func TestMonitorCollectorPublishesCurrentStateGauges(t *testing.T) {
 	assertGauge(t, metrics.RunningStaleRecords, nil, 8)
 	assertGauge(t, metrics.RedisQueueItems, nil, 9)
 	assertGauge(t, metrics.Records, map[string]string{metrics.LabelStatus: string(model.RecordStatusPending)}, 5)
+	assertGauge(t, metrics.RecordSuccessRate, nil, 60)
+	assertGauge(t, metrics.RecordDurationP95Ms, nil, 315.5)
 	assertCutoff(t, repo.pendingBefore, 120*time.Second)
 	assertCutoff(t, repo.runningBefore, 60*time.Second)
 }

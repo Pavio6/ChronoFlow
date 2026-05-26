@@ -1,8 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Button, Empty, Select, Space, Tag } from 'antd';
 import { ReloadOutlined } from '@ant-design/icons';
-import { getMonitoringHistory } from '../api/monitoring';
-import type { MonitoringHistory, MonitoringPoint } from '../types';
+import { getMonitoringHistory, getMonitoringSummary } from '../api/monitoring';
+import type { MonitoringHistory, MonitoringPoint, MonitoringSummary } from '../types';
 
 const rangeOptions = [
   { label: '最近 15 分钟', value: 15 },
@@ -14,6 +14,7 @@ const rangeOptions = [
 const Monitoring: React.FC = () => {
   const [historyLoading, setHistoryLoading] = useState(false);
   const [history, setHistory] = useState<MonitoringHistory | null>(null);
+  const [summary, setSummary] = useState<MonitoringSummary | null>(null);
   const [historyUnavailable, setHistoryUnavailable] = useState(false);
   const [rangeMinutes, setRangeMinutes] = useState(60);
   const historyRequestID = useRef(0);
@@ -22,11 +23,15 @@ const Monitoring: React.FC = () => {
     const requestID = ++historyRequestID.current;
     setHistoryLoading(true);
     try {
-      const data = await getMonitoringHistory(rangeMinutes);
+      const [data, current] = await Promise.all([
+        getMonitoringHistory(rangeMinutes),
+        getMonitoringSummary(),
+      ]);
       if (requestID !== historyRequestID.current) {
         return;
       }
       setHistory(data);
+      setSummary(current);
       setHistoryUnavailable(false);
     } catch {
       if (requestID === historyRequestID.current) {
@@ -40,13 +45,15 @@ const Monitoring: React.FC = () => {
   }, [rangeMinutes]);
 
   useEffect(() => {
-    loadHistory();
+    const initialLoad = window.setTimeout(loadHistory, 0);
     const timer = window.setInterval(loadHistory, 10000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initialLoad);
+      window.clearInterval(timer);
+    };
   }, [loadHistory]);
 
   const historySeries = history?.series;
-  const availability = latestValue(historySeries?.availability);
 
   return (
     <div className="page-stack monitor-page">
@@ -64,42 +71,19 @@ const Monitoring: React.FC = () => {
       <div className="monitor-grid">
         <section className="surface monitor-panel">
           <div className="panel-heading">
-            <h3>服务可用性</h3>
-            <HealthStat
-              label="采集状态"
-              value={availability === undefined ? '--' : availability === 1 ? 'UP' : 'DOWN'}
-              healthy={availability === undefined ? undefined : availability === 1}
-            />
+            <h3>执行状态分布</h3>
+            <span>当前记录</span>
           </div>
-          <LineChart
-            title="Prometheus scrape"
-            points={values(historySeries?.availability)}
-            labels={labels(historySeries?.availability)}
-            color="#16a34a"
-            displayValue={(value) => value === 1 ? 'UP' : 'DOWN'}
-          />
+          <StatusDonut records={summary?.records} />
         </section>
 
         <section className="surface monitor-panel">
           <div className="panel-heading">
-            <h3>成功率趋势</h3>
-            <span>{historySeries?.success_rate.length || 0} samples</span>
+            <h3>执行耗时</h3>
+            <span>P95 duration</span>
           </div>
-          <LineChart
-            points={values(historySeries?.success_rate)}
-            labels={labels(historySeries?.success_rate)}
-            suffix="%"
-            color="#16a34a"
-          />
-        </section>
-
-        <section className="surface monitor-panel">
-          <div className="panel-heading">
-            <h3>回调延迟</h3>
-            <span>P95 latency</span>
-          </div>
-          <LineChart
-            title="P95 延迟"
+          <TrendLineChart
+            title="P95 耗时"
             points={values(historySeries?.callback_p95_ms)}
             labels={labels(historySeries?.callback_p95_ms)}
             suffix="ms"
@@ -112,46 +96,118 @@ const Monitoring: React.FC = () => {
             <h3>异常任务</h3>
             <span>overdue or stale</span>
           </div>
-          <LineChart
+          <BarTrendChart
             title="超期或卡住记录"
             points={values(historySeries?.abnormal_records)}
             labels={labels(historySeries?.abnormal_records)}
             color="#d97706"
           />
         </section>
+
+        <section className="surface monitor-panel">
+          <div className="panel-heading">
+            <h3>Redis 队列</h3>
+            <span>queue status</span>
+          </div>
+          <QueueStat redis={summary?.redis} />
+        </section>
+
       </div>
     </div>
   );
 };
 
-const HealthStat: React.FC<{ label: string; value: string; healthy?: boolean }> = ({ label, value, healthy }) => (
-  <div className="health-chip">
-    <span>{label}</span>
-    <strong className={healthy === undefined ? undefined : healthy ? 'success-text' : 'danger-text'}>{value}</strong>
-  </div>
-);
+interface StatusDonutProps {
+  records?: MonitoringSummary['records'];
+}
 
-interface LineChartProps {
+const StatusDonut: React.FC<StatusDonutProps> = ({ records }) => {
+  if (!records) {
+    return <ChartEmpty />;
+  }
+  const segments = [
+    { key: 'success', label: '成功', value: records.success, color: '#16a34a' },
+    { key: 'failed', label: '失败', value: records.failed, color: '#dc2626' },
+    { key: 'running', label: '运行中', value: records.running, color: '#2563eb' },
+    { key: 'pending', label: '等待中', value: records.pending, color: '#a1a1aa' },
+  ];
+  const total = records.total || 1;
+  const radius = 52;
+  const circumference = 2 * Math.PI * radius;
+  let accumulated = 0;
+
+  return (
+    <div className="donut-card">
+      <svg className="donut-svg" viewBox="0 0 160 160" role="img" aria-label="执行状态分布">
+        <circle className="donut-track" cx="80" cy="80" r={radius} />
+        {segments.map((segment) => {
+          const length = (segment.value / total) * circumference;
+          const offset = -accumulated;
+          accumulated += length;
+          return (
+            <circle
+              key={segment.key}
+              className="donut-segment"
+              cx="80"
+              cy="80"
+              r={radius}
+              stroke={segment.color}
+              strokeDasharray={`${length} ${circumference - length}`}
+              strokeDashoffset={offset}
+            />
+          );
+        })}
+        <text className="donut-total" x="80" y="77">{records.total}</text>
+        <text className="donut-label" x="80" y="96">总执行数</text>
+      </svg>
+      <div className="donut-legend">
+        {segments.map((segment) => (
+          <div key={segment.key}>
+            <span style={{ backgroundColor: segment.color }} />
+            <label>{segment.label}</label>
+            <strong>{segment.value}</strong>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const QueueStat: React.FC<{ redis?: MonitoringSummary['redis'] }> = ({ redis }) => {
+  if (!redis) {
+    return <ChartEmpty />;
+  }
+  const isClear = redis.queue_items === 0;
+  return (
+    <div className="queue-stat-card">
+      <div className={`queue-status ${isClear ? 'healthy' : 'busy'}`}>
+        <span />
+        {isClear ? '队列畅通' : '处理中'}
+      </div>
+      <strong>{redis.queue_items}</strong>
+      <label>待触发队列任务</label>
+      <div className="queue-meta">
+        <div><span>队列键</span><b>{redis.queue_keys}</b></div>
+        <div><span>分桶键</span><b>{redis.bucket_keys}</b></div>
+        <div><span>锁数量</span><b>{redis.lock_keys}</b></div>
+      </div>
+    </div>
+  );
+};
+
+interface TrendChartProps {
   title?: string;
   points: number[];
   labels: string[];
   color: string;
   suffix?: string;
   precision?: number;
-  displayValue?: (value: number) => string;
 }
 
-const LineChart: React.FC<LineChartProps> = ({ title, points, labels, color, suffix = '', precision, displayValue }) => {
+const TrendLineChart: React.FC<TrendChartProps> = ({ title, points, labels, color, suffix = '', precision }) => {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
   if (points.length === 0) {
-    return (
-      <div className="line-card chart-empty">
-        <div className="line-card-head">
-          <span>{title || '趋势'}</span>
-          <strong>--</strong>
-        </div>
-        <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无历史数据" />
-      </div>
-    );
+    return <ChartEmpty title={title} />;
   }
   const normalized = points;
   const max = Math.max(...normalized, 1);
@@ -168,15 +224,33 @@ const LineChart: React.FC<LineChartProps> = ({ title, points, labels, color, suf
   });
   const line = coords.map((point) => `${point.x},${point.y}`).join(' ');
   const area = `${padding},${height - padding} ${line} ${width - padding},${height - padding}`;
-  const latest = normalized[normalized.length - 1] || 0;
+  const latestValue = normalized[normalized.length - 1] || 0;
+  const activeIndex = hoveredIndex ?? normalized.length - 1;
+  const activeValue = normalized[activeIndex] || 0;
+  const activePoint = coords[activeIndex];
+  const displayPrecision = precision ?? (suffix === '%' || suffix === 'ms' ? 1 : 0);
+
+  const handlePointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = ((event.clientX - bounds.left) / bounds.width) * width;
+    const index = step === 0 ? 0 : Math.round((x - padding) / step);
+    setHoveredIndex(clampIndex(index, normalized.length));
+  };
 
   return (
     <div className="line-card">
       <div className="line-card-head">
         <span>{title || '趋势'}</span>
-        <strong>{displayValue ? displayValue(latest) : `${latest.toFixed(precision ?? (suffix === '%' || suffix === 'ms' ? 1 : 0))}${suffix}`}</strong>
+        <strong>{`${latestValue.toFixed(displayPrecision)}${suffix}`}</strong>
       </div>
-      <svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={title || '趋势图'}>
+      <svg
+        className="interactive-chart"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={title || '趋势图'}
+        onPointerMove={handlePointerMove}
+        onPointerLeave={() => setHoveredIndex(null)}
+      >
         <defs>
           <linearGradient id={`area-${color.replace('#', '')}`} x1="0" x2="0" y1="0" y2="1">
             <stop offset="0%" stopColor={color} stopOpacity="0.18" />
@@ -189,14 +263,96 @@ const LineChart: React.FC<LineChartProps> = ({ title, points, labels, color, suf
         {coords.map((point, index) => (
           <circle key={`${point.x}-${index}`} cx={point.x} cy={point.y} r="3.5" fill="#ffffff" stroke={color} strokeWidth="2" />
         ))}
+        {hoveredIndex !== null && (
+          <>
+            <line className="chart-crosshair" x1={activePoint.x} y1={padding} x2={activePoint.x} y2={height - padding} />
+            <circle className="chart-active-point" cx={activePoint.x} cy={activePoint.y} r="6" fill="#ffffff" stroke={color} strokeWidth="3" />
+          </>
+        )}
       </svg>
       <div className="chart-labels">
         <span>{labels[0] || '--'}</span>
+        {hoveredIndex !== null && <strong>{`${labels[activeIndex]} | ${activeValue.toFixed(displayPrecision)}${suffix}`}</strong>}
         <span>{labels[labels.length - 1] || '--'}</span>
       </div>
     </div>
   );
 };
+
+const BarTrendChart: React.FC<TrendChartProps> = ({ title, points, labels, color, suffix = '', precision }) => {
+  const [hoveredIndex, setHoveredIndex] = useState<number | null>(null);
+  if (points.length === 0) {
+    return <ChartEmpty title={title} />;
+  }
+  const max = Math.max(...points, 1);
+  const width = 420;
+  const height = 140;
+  const padding = 14;
+  const gap = 7;
+  const barWidth = Math.max(5, Math.min(34, (width - padding * 2 - gap * (points.length - 1)) / points.length));
+  const usedWidth = barWidth * points.length + gap * (points.length - 1);
+  const startX = width - padding - usedWidth;
+  const latestValue = points[points.length - 1] || 0;
+  const activeIndex = hoveredIndex ?? points.length - 1;
+  const activeValue = points[activeIndex] || 0;
+
+  const handlePointerMove = (event: React.PointerEvent<SVGSVGElement>) => {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    const x = ((event.clientX - bounds.left) / bounds.width) * width;
+    const index = Math.round((x - startX - barWidth / 2) / (barWidth + gap));
+    setHoveredIndex(clampIndex(index, points.length));
+  };
+
+  return (
+    <div className="line-card bar-card">
+      <div className="line-card-head">
+        <span>{title || '趋势'}</span>
+        <strong>{`${latestValue.toFixed(precision ?? 0)}${suffix}`}</strong>
+      </div>
+      <svg
+        className="interactive-chart"
+        viewBox={`0 0 ${width} ${height}`}
+        role="img"
+        aria-label={title || '柱状趋势图'}
+        onPointerMove={handlePointerMove}
+        onPointerLeave={() => setHoveredIndex(null)}
+      >
+        <polyline className="grid-line" points={`${padding},${height - padding} ${width - padding},${height - padding}`} />
+        {points.map((value, index) => {
+          const barHeight = Math.max(value === 0 ? 3 : 8, (value / max) * (height - padding * 2));
+          return (
+            <rect
+              key={`${value}-${index}`}
+              x={startX + index * (barWidth + gap)}
+              y={height - padding - barHeight}
+              width={barWidth}
+              height={barHeight}
+              rx="3"
+              fill={color}
+              opacity={0.38 + (index / Math.max(points.length, 1)) * 0.52}
+              className={hoveredIndex === index ? 'is-active' : undefined}
+            />
+          );
+        })}
+      </svg>
+      <div className="chart-labels">
+        <span>{labels[0] || '--'}</span>
+        {hoveredIndex !== null && <strong>{`${labels[activeIndex]} | ${activeValue.toFixed(precision ?? 0)}${suffix}`}</strong>}
+        <span>{labels[labels.length - 1] || '--'}</span>
+      </div>
+    </div>
+  );
+};
+
+const ChartEmpty: React.FC<{ title?: string }> = ({ title }) => (
+  <div className="line-card chart-empty">
+    <div className="line-card-head">
+      <span>{title || '当前分布'}</span>
+      <strong>--</strong>
+    </div>
+    <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无监控数据" />
+  </div>
+);
 
 const values = (points?: MonitoringPoint[]): number[] => points?.map((item) => item.value) || [];
 
@@ -204,6 +360,6 @@ const labels = (points?: MonitoringPoint[]): string[] => points?.map((item) => (
   new Date(item.timestamp * 1000).toLocaleTimeString('zh-CN', { hour12: false, hour: '2-digit', minute: '2-digit' })
 )) || [];
 
-const latestValue = (points?: MonitoringPoint[]): number | undefined => points && points.length > 0 ? points[points.length - 1].value : undefined;
+const clampIndex = (index: number, count: number): number => Math.max(0, Math.min(index, count - 1));
 
 export default Monitoring;

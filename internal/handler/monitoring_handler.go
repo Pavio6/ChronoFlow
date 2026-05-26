@@ -117,9 +117,8 @@ type prometheusRangeResponse struct {
 }
 
 var historyQueries = map[string]string{
-	"availability":     `up{job="chronoflow"}`,
-	"success_rate":     `100 * sum(rate(chronoflow_callback_requests_total{result="success"}[5m])) / clamp_min(sum(rate(chronoflow_callback_requests_total[5m])), 1e-9)`,
-	"callback_p95_ms":  `1000 * histogram_quantile(0.95, sum by (le) (rate(chronoflow_callback_duration_seconds_bucket[5m])))`,
+	"success_rate":     `chronoflow_record_success_rate_percent`,
+	"callback_p95_ms":  `chronoflow_record_duration_p95_milliseconds`,
 	"abnormal_records": `chronoflow_pending_overdue_records + chronoflow_running_stale_records`,
 }
 

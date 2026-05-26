@@ -16,6 +16,7 @@ type monitorRecordRepository interface {
 	CountByStatus() (map[model.RecordStatus]int64, error)
 	CountPendingOverdue(before time.Time) (int64, error)
 	CountRunningStale(before time.Time) (int64, error)
+	CompletedDurationP95Milliseconds() (float64, error)
 }
 
 type monitorQueue interface {
@@ -72,6 +73,19 @@ func (c *MonitorCollector) collect(ctx context.Context) {
 		} {
 			c.reporter.SetRecordCount(string(status), statusCounts[status])
 		}
+		completed := statusCounts[model.RecordStatusSuccess] + statusCounts[model.RecordStatusFailed]
+		var successRate float64
+		if completed > 0 {
+			successRate = 100 * float64(statusCounts[model.RecordStatusSuccess]) / float64(completed)
+		}
+		c.reporter.SetRecordSuccessRate(successRate)
+	}
+
+	p95, err := c.recRepo.CompletedDurationP95Milliseconds()
+	if err != nil {
+		logger.Error("采集已完成执行 P95 耗时指标失败", zap.Error(err))
+	} else {
+		c.reporter.SetRecordDurationP95Milliseconds(p95)
 	}
 
 	now := time.Now()

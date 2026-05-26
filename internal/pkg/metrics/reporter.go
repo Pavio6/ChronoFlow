@@ -18,6 +18,8 @@ const (
 	PendingOverdueRecords   = "chronoflow_pending_overdue_records"
 	RunningStaleRecords     = "chronoflow_running_stale_records"
 	RedisQueueItems         = "chronoflow_redis_queue_items"
+	RecordSuccessRate       = "chronoflow_record_success_rate_percent"
+	RecordDurationP95Ms     = "chronoflow_record_duration_p95_milliseconds"
 
 	LabelResult = "result"
 	LabelStatus = "status"
@@ -34,6 +36,8 @@ type Reporter struct {
 	pendingOverdue     prometheus.Gauge
 	runningStale       prometheus.Gauge
 	redisQueueItems    prometheus.Gauge
+	recordSuccessRate  prometheus.Gauge
+	recordDurationP95  prometheus.Gauge
 	execTotalCount     atomic.Int64
 	execSuccessCount   atomic.Int64
 	execFailedCount    atomic.Int64
@@ -87,6 +91,14 @@ func NewReporter() *Reporter {
 				Name: RedisQueueItems,
 				Help: "Current total number of items in ChronoFlow Redis queues.",
 			}),
+			recordSuccessRate: promauto.NewGauge(prometheus.GaugeOpts{
+				Name: RecordSuccessRate,
+				Help: "Success percentage of completed timer records currently stored in MySQL.",
+			}),
+			recordDurationP95: promauto.NewGauge(prometheus.GaugeOpts{
+				Name: RecordDurationP95Ms,
+				Help: "P95 duration in milliseconds of completed timer records currently stored in MySQL.",
+			}),
 		}
 		for _, result := range []string{ResultSuccess, ResultFailed} {
 			reporterInstance.callbackRequests.WithLabelValues(result).Add(0)
@@ -129,6 +141,14 @@ func (r *Reporter) SetRunningStaleRecords(count int64) {
 
 func (r *Reporter) SetRedisQueueItems(count int64) {
 	r.redisQueueItems.Set(float64(count))
+}
+
+func (r *Reporter) SetRecordSuccessRate(value float64) {
+	r.recordSuccessRate.Set(value)
+}
+
+func (r *Reporter) SetRecordDurationP95Milliseconds(value float64) {
+	r.recordDurationP95.Set(value)
 }
 
 // Snapshot returns aggregated callback values for the current server process.

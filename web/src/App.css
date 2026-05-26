@@ -372,7 +372,9 @@
 }
 
 .monitor-page {
-  gap: 18px;
+  height: calc(100vh - 167px);
+  min-height: 640px;
+  gap: 14px;
 }
 
 .monitor-toolbar {
@@ -395,11 +397,19 @@
 
 .monitor-grid {
   display: grid;
+  flex: 1;
+  width: min(100%, 1080px);
+  margin: 0 auto;
+  min-height: 0;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-rows: repeat(2, minmax(0, 1fr));
+  gap: 18px;
 }
 
 .monitor-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
   padding: 18px;
 }
 
@@ -423,21 +433,6 @@
   font-size: 12px;
 }
 
-.health-chip span {
-  color: #71717a;
-  font-size: 12px;
-}
-
-.health-chip {
-  display: flex;
-  align-items: baseline;
-  gap: 9px;
-}
-
-.health-chip strong {
-  font-size: 14px;
-}
-
 .monitor-loading,
 .monitor-empty {
   display: grid;
@@ -447,7 +442,11 @@
 }
 
 .line-card {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   min-width: 0;
+  min-height: 0;
   padding: 14px;
   background: #fafafa;
   border: 1px solid #e4e4e7;
@@ -474,12 +473,164 @@
 
 .line-card svg {
   display: block;
+  flex: 1;
   width: 100%;
-  height: 150px;
+  min-height: 102px;
+}
+
+.donut-card,
+.queue-stat-card {
+  flex: 1;
+  min-height: 0;
+  padding: 12px 16px;
+  background: #fafafa;
+  border: 1px solid #e4e4e7;
+  border-radius: 8px;
+}
+
+.donut-card {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 22px;
+}
+
+.donut-svg {
+  width: 146px;
+  height: 146px;
+}
+
+.donut-track,
+.donut-segment {
+  fill: none;
+  stroke-width: 16;
+}
+
+.donut-track {
+  stroke: #e4e4e7;
+}
+
+.donut-segment {
+  transform: rotate(-90deg);
+  transform-origin: center;
+}
+
+.donut-total {
+  fill: #18181b;
+  font-size: 26px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+
+.donut-label {
+  fill: #71717a;
+  font-size: 11px;
+  text-anchor: middle;
+}
+
+.donut-legend {
+  display: grid;
+  gap: 13px;
+  min-width: 100px;
+}
+
+.donut-legend div {
+  display: grid;
+  grid-template-columns: 10px 1fr auto;
+  align-items: center;
+  gap: 9px;
+  color: #71717a;
+  font-size: 12px;
+}
+
+.donut-legend span {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+
+.donut-legend strong {
+  color: #18181b;
+  font-size: 13px;
+}
+
+.bar-card rect {
+  transition: height 220ms ease, y 220ms ease;
+}
+
+.bar-card rect.is-active {
+  opacity: 1;
+}
+
+.queue-stat-card {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.queue-status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 10px;
+  color: #71717a;
+  font-size: 12px;
+}
+
+.queue-status span {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.queue-status.healthy span {
+  background: #16a34a;
+}
+
+.queue-status.busy span {
+  background: #d97706;
+}
+
+.queue-stat-card > strong {
+  color: #18181b;
+  font-size: 46px;
+  font-weight: 700;
+  line-height: 1;
+}
+
+.queue-stat-card > label {
+  margin-top: 7px;
+  color: #71717a;
+  font-size: 12px;
+}
+
+.queue-meta {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  width: 100%;
+  margin-top: 22px;
+  border-top: 1px solid #e4e4e7;
+  padding-top: 12px;
+}
+
+.queue-meta div {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 6px;
+  color: #71717a;
+  font-size: 11px;
+}
+
+.queue-meta b {
+  color: #18181b;
+  font-size: 14px;
+  font-weight: 600;
 }
 
 .chart-empty {
-  min-height: 204px;
+  min-height: 0;
 }
 
 .chart-empty .ant-empty {
@@ -493,11 +644,30 @@
   stroke-width: 1;
 }
 
+.interactive-chart {
+  cursor: crosshair;
+}
+
+.chart-crosshair {
+  stroke: #a1a1aa;
+  stroke-dasharray: 3 4;
+  stroke-width: 1;
+}
+
 .chart-labels {
   display: flex;
+  position: relative;
   justify-content: space-between;
   color: #a1a1aa;
   font-size: 11px;
+}
+
+.chart-labels strong {
+  position: absolute;
+  left: 50%;
+  color: #52525b;
+  font-weight: 500;
+  transform: translateX(-50%);
 }
 
 @media (max-width: 900px) {
@@ -530,6 +700,15 @@
   .monitor-grid {
     grid-template-columns: 1fr;
   }
+
+  .monitor-page {
+    height: auto;
+    min-height: 0;
+  }
+
+  .monitor-grid {
+    grid-template-rows: unset;
+  }
 }
 
 @media (max-width: 560px) {
@@ -557,5 +736,14 @@
 
   .line-card svg {
     height: 130px;
+  }
+
+  .donut-card {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .donut-legend {
+    grid-template-columns: repeat(2, minmax(100px, 1fr));
   }
 }

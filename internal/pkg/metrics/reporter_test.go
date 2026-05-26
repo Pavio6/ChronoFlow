@@ -15,6 +15,8 @@ func TestReporterExportsMVPMetricsWithoutHighCardinalityLabels(t *testing.T) {
 	reporter.SetPendingOverdueRecords(1)
 	reporter.SetRunningStaleRecords(3)
 	reporter.SetRedisQueueItems(4)
+	reporter.SetRecordSuccessRate(94.5)
+	reporter.SetRecordDurationP95Milliseconds(315)
 
 	families, err := prometheus.DefaultGatherer.Gather()
 	if err != nil {
@@ -32,6 +34,8 @@ func TestReporterExportsMVPMetricsWithoutHighCardinalityLabels(t *testing.T) {
 		PendingOverdueRecords,
 		RunningStaleRecords,
 		RedisQueueItems,
+		RecordSuccessRate,
+		RecordDurationP95Ms,
 	} {
 		if byName[name] == nil {
 			t.Errorf("metric %q was not exported", name)
