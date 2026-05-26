@@ -130,6 +130,58 @@ const ExecutionList: React.FC = () => {
     },
   ];
 
+  const detailItems = selected ? [
+    { key: 'id', label: 'ID', children: selected.id },
+    { key: 'timer_name', label: '定时器名称', children: selected.timer_name || '-' },
+    { key: 'timer_id', label: '定时器ID', children: selected.timer_id },
+    {
+      key: 'trigger_time',
+      label: '触发时间',
+      children: new Date(selected.trigger_time).toLocaleString('zh-CN'),
+    },
+    {
+      key: 'status',
+      label: '状态',
+      children: (
+        <Tag color={RECORD_STATUS_CONFIG[selected.status]?.color} className="status-tag">
+          {RECORD_STATUS_CONFIG[selected.status]?.label}
+        </Tag>
+      ),
+    },
+    { key: 'response_code', label: '响应码', children: selected.response_code || '-' },
+    { key: 'duration', label: '耗时', children: selected.duration ? `${selected.duration}ms` : '-' },
+    { key: 'method', label: '方法', children: selected.request_method },
+    { key: 'url', label: 'URL', span: 2, children: selected.request_url },
+    {
+      key: 'request_body',
+      label: '请求体',
+      span: 2,
+      children: <pre className="code-block">{selected.request_body || '-'}</pre>,
+    },
+    {
+      key: 'response_body',
+      label: '响应体',
+      span: 2,
+      children: <pre className="code-block">{selected.response_body || '-'}</pre>,
+    },
+    ...(selected.error_message ? [{
+      key: 'error_message',
+      label: '错误',
+      span: 2,
+      children: <span className="danger-text">{selected.error_message}</span>,
+    }] : []),
+    {
+      key: 'started_at',
+      label: '开始',
+      children: selected.started_at ? new Date(selected.started_at).toLocaleString('zh-CN') : '-',
+    },
+    {
+      key: 'finished_at',
+      label: '完成',
+      children: selected.finished_at ? new Date(selected.finished_at).toLocaleString('zh-CN') : '-',
+    },
+  ] : [];
+
   return (
     <div className="page-stack">
       <div className="metric-grid four">
@@ -200,44 +252,7 @@ const ExecutionList: React.FC = () => {
         className="detail-modal"
       >
         {selected && (
-          <Descriptions bordered column={2} size="small">
-            <Descriptions.Item label="ID">{selected.id}</Descriptions.Item>
-            <Descriptions.Item label="定时器名称">{selected.timer_name || '-'}</Descriptions.Item>
-            <Descriptions.Item label="定时器ID">{selected.timer_id}</Descriptions.Item>
-            <Descriptions.Item label="触发时间">
-              {new Date(selected.trigger_time).toLocaleString('zh-CN')}
-            </Descriptions.Item>
-            <Descriptions.Item label="状态">
-              <Tag color={RECORD_STATUS_CONFIG[selected.status]?.color} className="status-tag">
-                {RECORD_STATUS_CONFIG[selected.status]?.label}
-              </Tag>
-            </Descriptions.Item>
-            <Descriptions.Item label="响应码">{selected.response_code || '-'}</Descriptions.Item>
-            <Descriptions.Item label="耗时">{selected.duration ? `${selected.duration}ms` : '-'}</Descriptions.Item>
-            <Descriptions.Item label="方法">{selected.request_method}</Descriptions.Item>
-            <Descriptions.Item label="URL" span={2}>{selected.request_url}</Descriptions.Item>
-            <Descriptions.Item label="请求体" span={2}>
-              <pre className="code-block">
-                {selected.request_body || '-'}
-              </pre>
-            </Descriptions.Item>
-            <Descriptions.Item label="响应体" span={2}>
-              <pre className="code-block">
-                {selected.response_body || '-'}
-              </pre>
-            </Descriptions.Item>
-            {selected.error_message && (
-              <Descriptions.Item label="错误" span={2}>
-                <span className="danger-text">{selected.error_message}</span>
-              </Descriptions.Item>
-            )}
-            <Descriptions.Item label="开始">
-              {selected.started_at ? new Date(selected.started_at).toLocaleString('zh-CN') : '-'}
-            </Descriptions.Item>
-            <Descriptions.Item label="完成">
-              {selected.finished_at ? new Date(selected.finished_at).toLocaleString('zh-CN') : '-'}
-            </Descriptions.Item>
-          </Descriptions>
+          <Descriptions bordered column={2} size="small" items={detailItems} />
         )}
       </Modal>
     </div>
