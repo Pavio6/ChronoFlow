@@ -1,16 +1,22 @@
-.PHONY: dev-start dev-app dev-frontend clean docker-down docker-logs build-frontend build-backend build test-callback
+.PHONY: dev-start demo-data dev-app dev-frontend clean docker-down docker-logs build-frontend build-backend build test-callback
 
 # 启动 Docker 基础依赖与可观测性栈；后端使用 make dev-app 单独启动
 dev-start:
 	docker compose up -d mysql redis prometheus grafana
 	@echo "等待服务就绪..."
-	@sleep 5
+	@until docker compose exec -T -e MYSQL_PWD=123456 mysql mysqladmin ping -h localhost -uroot --silent >/dev/null 2>&1; do sleep 2; done
 	@echo "Docker 基础依赖与可观测性服务已启动"
 	@echo "  - MySQL: localhost:3306"
 	@echo "  - Redis: localhost:6379"
 	@echo "  - Prometheus: http://localhost:9090"
 	@echo "  - Grafana: http://localhost:3001"
 	@echo "Now run: make dev-app (new terminal) and make dev-frontend (new terminal)"
+
+# 幂等加载截图用 MySQL 与 Redis 演示数据，也可对已有数据卷单独执行
+demo-data:
+	@docker compose exec -T -e MYSQL_PWD=123456 mysql mysql -uroot chronoflow < migrations/002_demo_data.sql
+	@docker compose exec -T redis redis-cli -n 1 < seeds/002_demo_redis.redis >/dev/null
+	@echo "演示数据已加载（MySQL + Redis）"
 
 # 启动后端服务
 dev-app:
