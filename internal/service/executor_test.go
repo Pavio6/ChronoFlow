@@ -157,3 +157,11 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 func (fn roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return fn(req)
 }
+
+func TestNewExecutorUsesFixedHTTPCallbackTimeout(t *testing.T) {
+	executor := NewExecutor(nil, nil, nil, nil, nil, 0)
+
+	if executor.httpClient.Timeout != 12*time.Second {
+		t.Fatalf("HTTP callback timeout = %v, want 12s", executor.httpClient.Timeout)
+	}
+}
