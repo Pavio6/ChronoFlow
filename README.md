@@ -4,12 +4,11 @@ ChronoFlow 是一个使用 Go 实现的定时任务调度服务。用户定义 C
 
 ## 重要功能
 
-- **任务管理**：创建带六段式 Cron 表达式的 HTTP 回调任务，支持列表查询、名称搜索、状态筛选、激活、停用和逻辑删除。
-- **回调执行记录**：记录触发时间、执行状态、请求信息、响应结果、错误信息和执行耗时；管理端支持按任务名称和状态筛选、查看详情。
-- **调度执行**：激活任务时立即生成未来窗口内的执行记录，后台 Migrator 持续生成后续记录；Scheduler 按分钟时间片触发到期任务。
-- **防重复执行**：执行记录以 `(timer_id, trigger_time)` 唯一约束去重，Executor 通过 `PENDING -> RUNNING` 条件更新取得唯一执行权，并以 Bloom Filter 辅助过滤已成功执行的任务。
-- **监控面板**：展示执行状态分布、P95 执行耗时趋势、异常任务趋势和 Redis 队列状态；耗时与异常趋势支持按时间点悬浮查看值，右上角展示最新值。
-- **可观测性**：服务暴露 Prometheus 指标，管理端通过后端查询 Prometheus 历史数据；Docker Compose 提供 Prometheus 和 Grafana 运行环境。
+- **预生成式时间调度**：任务激活时立即创建近期执行记录，`Migrator` 持续补充后续窗口；MySQL 保存可靠执行依据，Redis ZSet 按分钟承载到期任务索引，避免调度阶段反复扫描全部任务定义。
+- **动态分桶与资源隔离**：通过 Redis Lua 原子登记分钟任务量，并在配置上限内只增不减地扩展 ZSet 分桶；调度扫描与 HTTP 回调分别运行在独立的 `ants` 协程池中，避免慢回调直接挤占分片扫描资源。
+- **多实例协调与任务补偿**：以分钟分片和桶为调度单元，通过带所有权校验的租约机制协调多节点处理；同时合并 MySQL 待执行记录并补扫上一分钟，覆盖 Redis 投递不完整和时间边界异常。
+- **幂等执行与路径优化**：通过执行记录唯一约束和原子执行权竞争避免重复回调；使用本地定义缓存与 Bloom Filter 预筛已成功任务，降低重复派发场景下的额外处理成本。
+- **监控与执行追踪**：记录回调请求、响应、错误与耗时；管理端展示执行状态分布、P95 执行耗时、异常任务趋势和 Redis 队列状态，历史趋势由 Prometheus 提供。
 
 ## 核心设计
 
@@ -20,7 +19,7 @@ ChronoFlow 的调度执行引擎由一个独立的 `Migrator`、`Scheduler`、`T
 ```text
 Migrator
 
-Scheduler --[schedulerPool]--> Trigger --[triggerPool]--> Executor --[12s timeout]--> HTTP Callback
+Scheduler --[schedulerPool]--> Trigger --[triggerPool]--> Executor --[timeout control]--> HTTP Callback
 ```
 
 | 组件 | 功能 |
@@ -28,9 +27,9 @@ Scheduler --[schedulerPool]--> Trigger --[triggerPool]--> Executor --[12s timeou
 | `Migrator` | 独立扫描激活任务，预生成未来窗口内的 `PENDING` 执行记录，并投递到 Redis 分片队列。 |
 | `Scheduler` | 扫描当前分钟和上一分钟分片，竞争 Redis 分片锁，并在取得锁后运行 `Trigger`。 |
 | `schedulerPool` | 承载分片扫描、锁竞争与 `Trigger.Run`。 |
-| `Trigger` | 在时间片内读取 Redis 到期任务，并将任务提交执行。 |
+| `Trigger` | 在时间片内读取 Redis 到期任务，合并 MySQL 待执行记录补偿结果，并将任务提交执行。 |
 | `triggerPool` | 承载 `Executor.Execute` 与 HTTP 回调期间的并发占用。 |
-| `Executor` | 原子抢占执行权，发起 HTTP 回调，随后更新执行结果和指标。 |
+| `Executor` | 原子抢占执行权，执行带超时控制的 HTTP 回调，随后更新执行结果和指标。 |
 
 ### 调度模型
 
@@ -39,7 +38,7 @@ Scheduler --[schedulerPool]--> Trigger --[triggerPool]--> Executor --[12s timeou
 3. Redis 使用分钟级 ZSet 队列，按投递规模在配置上限内动态增加桶数；Scheduler 扫描当前分钟和上一分钟的各个桶。
 4. 多个服务实例通过 Redis `SET NX` 分片锁竞争调度权；Trigger 同时合并 MySQL 中的 `PENDING` 记录，补偿 Redis 投递不完整的情况。
 5. Scheduler 的分片扫描池与 Trigger 的回调执行池彼此隔离，慢回调不占用调度扫描 worker。
-6. Executor 只有在原子抢占执行记录成功后才发送 HTTP 请求；HTTP 客户端采用固定 `12s` 超时，并将结果更新为 `SUCCESS` 或 `FAILED`。
+6. Executor 只有在原子抢占执行记录成功后才发送 HTTP 请求；回调请求具备超时控制，并将结果更新为 `SUCCESS` 或 `FAILED`。
 
 ### 状态模型
 
