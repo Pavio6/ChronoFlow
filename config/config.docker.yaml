@@ -35,6 +35,7 @@ monitoring:
   pending_overdue_seconds: 120
   running_stale_seconds: 60
   prometheus_url: "http://prometheus:9090"
+  grafana_url: "http://grafana:3000"
 
 log:
   level: info

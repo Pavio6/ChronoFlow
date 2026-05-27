@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
@@ -167,6 +169,17 @@ func main() {
 			"time":   time.Now().Format(time.RFC3339),
 		})
 	})
+
+	// Grafana dashboard is embedded in the management page through this same-origin path.
+	if cfg.Monitoring.GrafanaURL != "" {
+		grafanaTarget, err := url.Parse(cfg.Monitoring.GrafanaURL)
+		if err != nil {
+			logger.Fatal("Grafana 代理地址无效", zap.Error(err))
+		}
+		grafanaProxy := httputil.NewSingleHostReverseProxy(grafanaTarget)
+		r.Any("/grafana", gin.WrapH(grafanaProxy))
+		r.Any("/grafana/*path", gin.WrapH(grafanaProxy))
+	}
 
 	// 静态文件服务（前端）
 	r.Static("/assets", "./web/dist/assets")

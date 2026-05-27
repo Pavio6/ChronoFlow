@@ -75,6 +75,7 @@ type MonitoringConfig struct {
 	PendingOverdueSeconds  int    `mapstructure:"pending_overdue_seconds"`
 	RunningStaleSeconds    int    `mapstructure:"running_stale_seconds"`
 	PrometheusURL          string `mapstructure:"prometheus_url"`
+	GrafanaURL             string `mapstructure:"grafana_url"`
 }
 
 // LogConfig 日志配置
@@ -155,6 +156,9 @@ func normalizeMonitoringConfig(cfg *MonitoringConfig) {
 	if cfg.PrometheusURL == "" {
 		cfg.PrometheusURL = "http://localhost:9090"
 	}
+	if cfg.GrafanaURL == "" {
+		cfg.GrafanaURL = "http://localhost:3001"
+	}
 }
 
 // setDefaults 设置配置默认值
@@ -195,6 +199,7 @@ func setDefaults() {
 	viper.SetDefault("monitoring.pending_overdue_seconds", 120)
 	viper.SetDefault("monitoring.running_stale_seconds", 60)
 	viper.SetDefault("monitoring.prometheus_url", "http://localhost:9090")
+	viper.SetDefault("monitoring.grafana_url", "http://localhost:3001")
 
 	// 日志默认配置
 	viper.SetDefault("log.level", "info")

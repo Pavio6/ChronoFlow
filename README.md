@@ -8,7 +8,7 @@ ChronoFlow 是一个使用 Go 实现的定时任务调度服务。用户定义 C
 - **动态分桶与资源隔离**：通过 Redis Lua 原子登记分钟任务量，并在配置上限内只增不减地扩展 ZSet 分桶；调度扫描与 HTTP 回调分别运行在独立的 `ants` 协程池中，避免慢回调直接挤占分片扫描资源。
 - **多实例协调与任务补偿**：以分钟分片和桶为调度单元，通过带所有权校验的租约机制协调多节点处理；同时合并 MySQL 待执行记录并补扫上一分钟，覆盖 Redis 投递不完整和时间边界异常。
 - **幂等执行与路径优化**：通过执行记录唯一约束和原子执行权竞争避免重复回调；使用本地定义缓存与 Bloom Filter 预筛已成功任务，降低重复派发场景下的额外处理成本。
-- **监控与执行追踪**：记录回调请求、响应、错误与耗时；管理端展示执行状态分布、P95 执行耗时、异常任务趋势和 Redis 队列状态，历史趋势由 Prometheus 提供。
+- **监控与执行追踪**：记录回调请求、响应、错误与耗时；管理端嵌入 Grafana dashboard，展示执行状态趋势、真实成功回调速率、P95 回调耗时和 Redis 待触发队列，时序数据由 Prometheus 提供。
 
 ## 核心设计
 
@@ -114,7 +114,7 @@ make dev-app
 | Prometheus 指标 | `http://localhost:8080/metrics` |
 | 健康检查 | `http://localhost:8080/health` |
 | Prometheus | `http://localhost:9090` |
-| Grafana | `http://localhost:3001` |
+| Grafana Dashboard | `http://localhost:8080/grafana/` |
 
 ### 3. 启动管理端
 
@@ -124,22 +124,15 @@ npm install
 npm run dev
 ```
 
-管理端访问地址为 `http://localhost:3000`，开发服务器会将 `/api` 请求代理到后端服务。
+管理端访问地址为 `http://localhost:3000`，开发服务器会将 `/api` 与 `/grafana` 请求代理到后端服务。监控页直接嵌入 Grafana dashboard。
 
-### 4. 可选：启动回调测试服务
+## Grafana 监控
 
-```bash
-make test-callback
-```
+管理端 `/monitoring` 页面通过站内 `/grafana` 路径嵌入 Grafana dashboard。图表渲染由 Grafana 完成，Prometheus 采集的数据来自调度器真实执行的回调请求。
 
-测试服务监听 `http://localhost:9091`，提供以下回调目标：
+本地开发中，后端将 `/grafana` 代理至 `http://localhost:3001`；Compose 后端配置使用容器内地址 `http://grafana:3000`。为支持管理端 iframe，当前 Compose Grafana 配置启用了匿名只读访问和嵌入能力，生产部署不应直接沿用该认证配置。
 
-| 路径 | 行为 |
-| --- | --- |
-| `/callback/success` | 返回成功响应 |
-| `/callback/slow` | 延迟 10 秒后返回成功响应|
-| `/callback/error` | 返回 HTTP 500 |
-| `/stats` | 返回各回调的调用次数 |
+当前 dashboard 包含执行状态趋势、真实成功回调请求速率、真实回调 P95 耗时和 Redis 待触发队列；执行状态中的失败序列仅在存在失败记录时显示。
 
 ## API 概览
 
@@ -174,6 +167,7 @@ make test-callback
 | `monitoring.pending_overdue_seconds` | `120` | 等待执行异常阈值（秒） |
 | `monitoring.running_stale_seconds` | `60` | 执行中异常阈值（秒） |
 | `monitoring.prometheus_url` | `http://localhost:9090` | 历史趋势查询目标 |
+| `monitoring.grafana_url` | `http://localhost:3001` | `/grafana` 同源代理目标 |
 
 ## 构建与验证
 

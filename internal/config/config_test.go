@@ -23,6 +23,9 @@ func TestLoadDefaultsWorkerPoolSizes(t *testing.T) {
 	if cfg.Trigger.WorkerPoolSize != 100 {
 		t.Fatalf("trigger worker pool size = %d, want 100", cfg.Trigger.WorkerPoolSize)
 	}
+	if cfg.Monitoring.GrafanaURL != "http://localhost:3001" {
+		t.Fatalf("grafana url = %q, want local default", cfg.Monitoring.GrafanaURL)
+	}
 }
 
 func TestLoadNormalizesInvalidWorkerPoolSizes(t *testing.T) {

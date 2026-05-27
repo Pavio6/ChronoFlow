@@ -53,6 +53,8 @@ monitoring:
   running_stale_seconds: 60
   # 管理端历史曲线由后端代理查询 Prometheus
   prometheus_url: "http://localhost:9090"
+  # 管理端通过后端同源路径嵌入 Grafana dashboard
+  grafana_url: "http://localhost:3001"
 
 log:
   level: info
