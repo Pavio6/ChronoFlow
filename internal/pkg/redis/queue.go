@@ -257,12 +257,14 @@ func (q *RedisQueue) GetBucketNum(ctx context.Context, timeRange string, default
 	return val, nil
 }
 
-// Stats 汇总 ChronoFlow 在 Redis 中的队列、锁和分桶 key 数量
+// Stats 汇总尚未到达触发时刻的队列项，以及锁和分桶 key 数量。
+// Trigger 为补扫保留已到期成员，因此不能将整个 ZSet 计作待触发任务。
 func (q *RedisQueue) Stats(ctx context.Context) (QueueStats, error) {
 	var stats QueueStats
+	nowExclusive := fmt.Sprintf("(%d", time.Now().Unix())
 	if err := q.scanKeys(ctx, TaskQueuePrefix+"*", func(key string) error {
 		stats.QueueKeys++
-		count, err := q.client.ZCard(ctx, key).Result()
+		count, err := q.client.ZCount(ctx, key, nowExclusive, "+inf").Result()
 		if err != nil {
 			return fmt.Errorf("统计队列长度失败: %w", err)
 		}
