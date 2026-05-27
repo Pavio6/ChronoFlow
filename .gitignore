@@ -6,3 +6,7 @@
 .DS_Store
 
 server
+
+migrations/002_demo_data.sql
+
+tests/
