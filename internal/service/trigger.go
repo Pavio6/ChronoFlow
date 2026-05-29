@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/pkg/pool"
 	"github.com/chronoflow/internal/pkg/redis"
 	"github.com/chronoflow/internal/repository"
@@ -12,13 +11,16 @@ import (
 	"go.uber.org/zap"
 )
 
+// TriggerAck is called after a time slice is fully scanned.
+type TriggerAck func() error
+
 // Trigger 触发器
 // 被 Scheduler 启动后，在时间片内持续轮询 Redis ZSet
 // 读取到期任务后从 triggerPool 提交 Executor 协程执行
 // 核心流程：
 //  1. 在时间片内持续轮询 Redis ZSet {time_range}:{bucket}
 //  2. 以不重叠的 [cursor, dueEnd) 时间窗口读取到期任务
-//  3. 分片扫描成功后将锁保留 success_expiration，抑制上一分钟回扫重入
+//  3. 分片扫描成功后调用 ack，由 Scheduler 保留分片锁并抑制上一分钟回扫重入
 //  4. 每个窗口合并 MySQL PENDING 记录，覆盖 Redis 部分投递失败
 //  5. 从 triggerPool 提交 Executor 协程执行每个任务
 //
@@ -29,7 +31,6 @@ type Trigger struct {
 	triggerPool pool.WorkerPool
 	executor    *Executor
 	recRepo     repository.TimerRecordRepository
-	cfg         *config.SchedulerConfig
 }
 
 // NewTrigger 创建触发器实例
@@ -38,14 +39,12 @@ func NewTrigger(
 	triggerPool pool.WorkerPool,
 	executor *Executor,
 	recRepo repository.TimerRecordRepository,
-	cfg *config.SchedulerConfig,
 ) *Trigger {
 	return &Trigger{
 		queue:       queue,
 		triggerPool: triggerPool,
 		executor:    executor,
 		recRepo:     recRepo,
-		cfg:         cfg,
 	}
 }
 
@@ -53,9 +52,9 @@ func NewTrigger(
 // timeRange: 时间范围标识（YYYY-MM-DD-HH:mm）
 // bucket: 桶号
 // bucketNum: 总桶数（用于 DB 补偿时按 timer_id % bucketNum 过滤）
-// lock: Scheduler worker 获取的、带所有者 token 的分片锁
+// ack: Scheduler 提供的成功确认回调；Trigger 不直接感知锁实现
 // 此方法由 Scheduler 通过 schedulerPool 调用
-func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketNum int, lock *redis.SchedulerLock) {
+func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketNum int, ack TriggerAck) {
 	start := time.Now()
 	logger.Debug("Trigger 开始处理",
 		zap.String("time_range", timeRange),
@@ -70,8 +69,7 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
 	timeSliceEnd := timeSliceStart.Add(time.Minute)
 	cursor := timeSliceStart
 
-	// 与 xTimer 一致，完整分片成功扫描后才将锁延长为成功保留 TTL。
-	successExpiration := time.Duration(t.cfg.SuccessExpiration) * time.Second
+	// 与 xTimer 一致，完整分片成功扫描后才确认成功；具体确认动作由 Scheduler 提供。
 	completed := true
 
 	for cursor.Before(timeSliceEnd) {
@@ -145,9 +143,9 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
 		cursor = dueEnd
 	}
 
-	if completed {
-		if err := lock.Extend(ctx, successExpiration); err != nil {
-			logger.Warn("Trigger 完成后保留锁失败",
+	if completed && ack != nil {
+		if err := ack(); err != nil {
+			logger.Warn("Trigger 完成后确认分片失败",
 				zap.String("time_range", timeRange),
 				zap.Int("bucket", bucket),
 				zap.Error(err),

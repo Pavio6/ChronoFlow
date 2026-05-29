@@ -108,7 +108,7 @@ func main() {
 	)
 
 	// 触发器（被 Scheduler 调用，DB 部分投递补偿需要 recRepo）
-	trigger := service.NewTrigger(queue, triggerPool, executor, recRepo, &cfg.Scheduler)
+	trigger := service.NewTrigger(queue, triggerPool, executor, recRepo)
 
 	// 调度器
 	scheduler := service.NewScheduler(queue, schedulerPool, trigger, recRepo, &cfg.Scheduler)

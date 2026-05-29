@@ -19,7 +19,7 @@ func TestSchedulerAndTriggerHoldTheirAssignedPools(t *testing.T) {
 	triggerPool := &stubWorkerPool{name: "trigger"}
 	cfg := &config.SchedulerConfig{}
 
-	trigger := NewTrigger(nil, triggerPool, nil, nil, cfg)
+	trigger := NewTrigger(nil, triggerPool, nil, nil)
 	scheduler := NewScheduler(nil, schedulerPool, trigger, nil, cfg)
 
 	if trigger.triggerPool != triggerPool {

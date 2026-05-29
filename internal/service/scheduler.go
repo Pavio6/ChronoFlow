@@ -152,7 +152,11 @@ func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket in
 		if !acquired {
 			return
 		}
-		s.trigger.Run(ctx, timeRangeCopy, bucketCopy, bucketNum, lock)
+		successExpiration := time.Duration(s.cfg.SuccessExpiration) * time.Second
+		ack := func() error {
+			return lock.Extend(ctx, successExpiration)
+		}
+		s.trigger.Run(ctx, timeRangeCopy, bucketCopy, bucketNum, ack)
 	})
 	if err != nil {
 		logger.Error("Scheduler 提交 Trigger 到调度协程池失败",
