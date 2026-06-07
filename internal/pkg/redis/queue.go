@@ -14,8 +14,6 @@ const (
 	TaskQueuePrefix = "chronoflow:timer:"
 	// SchedulerLockPrefix 调度器分布式锁前缀
 	SchedulerLockPrefix = "chronoflow:scheduler_lock:"
-	// BloomPrefix 布隆过滤器 key 前缀
-	BloomPrefix = "chronoflow:bloom:"
 	// BucketMapPrefix 分桶映射 key 前缀，完整 key: {prefix}{time_range}
 	BucketMapPrefix = "chronoflow:bucket:"
 	// TaskCountPrefix 分钟累计投递任务数 key 前缀，完整 key: {prefix}{time_range}

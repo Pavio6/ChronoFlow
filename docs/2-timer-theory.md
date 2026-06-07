@@ -179,12 +179,7 @@ UPDATE ... WHERE status = PENDING → RowsAffected = 1 → 获得执行权
                                   → RowsAffected = 0 → 跳过重复派发
 ```
 
-**Bloom Filter 的位置**
-
 | 层级 | 作用 | 正确性职责 |
 |------|------|------------|
 | 唯一索引 | 阻止重复建任务记录 | 必须 |
 | 条件状态更新 | 竞争执行权 | 必须 |
-| Bloom Filter | 快速过滤可能已完成的任务，命中后再查 MySQL | 优化，不单独授予/拒绝执行许可 |
-
-Bloom Filter 置于 Executor 前置路径：命中后由 MySQL 状态确认是否跳过；miss、误判或查询故障仍进入数据库条件更新。它可以降低重复任务的后续处理开销，但不能替代原子抢占。

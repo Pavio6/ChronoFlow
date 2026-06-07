@@ -233,8 +233,6 @@ func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketN
 ```
 Executor.Execute(trigger)
     ↓
-Bloom Filter 快速查询；命中后 MySQL 确认已处理则跳过
-    ↓
 查询包含状态的定时器定义（内存缓存 → MySQL）
     ↓
 按定义状态判断；非 ACTIVE 则跳过
@@ -246,20 +244,13 @@ Bloom Filter 快速查询；命中后 MySQL 确认已处理则跳过
 使用固定 12s 超时执行 HTTP 回调
     ↓
 更新状态: RUNNING → SUCCESS/FAILED
-    ↓
-执行成功 → Bloom Filter 打点（仅成功时写入）
 ```
 
 停用或删除定时器不会删除 Redis ZSet 中已经打下的点。点仍可被 Trigger 读取并提交；Executor 按本地定义缓存中的状态判断是否执行，因此持有旧 `ACTIVE` 缓存的节点可能在一个 `step2_duration` 周期内继续发起回调，缓存过期回源 MySQL 后才跳过。
 
-### Bloom 快速过滤、存储唯一性与原子抢占
+### 存储唯一性与原子抢占
 
 ```
-执行前: Bloom Filter 查询
-    ↓ 命中且 MySQL 确认已处理
-    跳过重复任务
-    ↓ miss / 误判 / 查询异常
-    继续竞争执行权
 建记录: UNIQUE(timer_id, trigger_time)
     ↓ 防止 Migrator/Activate 并发创建重复记录
 执行前: UPDATE ... WHERE status = 'PENDING'
@@ -267,8 +258,6 @@ Bloom Filter 快速查询；命中后 MySQL 确认已处理则跳过
     执行任务
     ↓ RowsAffected = 0
     跳过重复派发
-
-Bloom Filter 在成功后写入，并在后续派发前快速查询；命中必须由 MySQL 确认，最终执行权仍由原子状态抢占授予。
 ```
 
 ### 状态变化
@@ -307,8 +296,6 @@ record.ResponseCode = responseCode
 record.ResponseBody = responseBody
 recRepo.Update(record)
 
-// 设置幂等标记
-bloom.Set(ctx, bloomKey, bloomVal, 86400)  // Bloom Filter，24 小时过期
 ```
 
 ### 执行失败
@@ -326,4 +313,3 @@ record.ErrorMessage = err.Error()
 | MySQL timer_records | 执行记录（触发时间、状态、结果等） | 执行历史 |
 | Redis ZSet | 待执行任务（score = 触发时间） | 高效任务调度 |
 | Redis Lock | 分布式锁（time_range + bucket，owner token） | 降低重复派发 |
-| Redis Bloom | 已成功执行任务标记 | 重复任务快速过滤 |

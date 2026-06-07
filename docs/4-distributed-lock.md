@@ -94,14 +94,3 @@ WHERE timer_id = ? AND trigger_time = ? AND status = 'PENDING';
 因此，即使一个 ZSet member 因故障恢复而被重复派发，也只有一个 Executor 能从数据库获得执行许可。
 
 获得执行权后，Executor 使用固定 `12s` 超时发送 HTTP 回调。下游超过该时限仍未完成时，记录会更新为 `FAILED`；该超时不改变分片锁的扫描和续期语义。
-
-### Bloom Filter
-
-Bloom Filter 同时用于读写路径：
-
-1. Executor 启动时先查询 Bloom Filter。
-2. 命中时查询 MySQL 状态确认；已离开 `PENDING` 的任务可提前跳过。
-3. miss、误判或 Bloom 查询异常时，继续走数据库 `PENDING -> RUNNING` 原子抢占。
-4. HTTP 回调成功后写入 Bloom Filter，供后续重复派发快速过滤。
-
-Bloom Filter 是前置性能优化，不能代替数据库条件更新，因为它存在误判且无法关闭并发竞争窗口。

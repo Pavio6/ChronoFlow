@@ -228,7 +228,6 @@ func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucke
 
 ### 核心职责
 
-- Bloom Filter 快速过滤已完成的重复任务
 - 通过数据库原子状态抢占取得最终执行权
 - 查询定时器定义
 - 执行 HTTP 回调
@@ -238,28 +237,23 @@ func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucke
 ### 执行流程
 
 ```
-1. Bloom Filter 快速查询
-   ├─ miss/查询失败 → 继续
-   └─ hit → MySQL 确认已处理则跳过；若为误判则继续
-
-2. 查询包含状态的定时器定义
+1. 查询包含状态的定时器定义
    ├─ 内存缓存命中 → 直接使用
    └─ 缓存未命中 → 查 MySQL → 写入缓存
 
-3. 使用定义状态判断是否执行
+2. 使用定义状态判断是否执行
    ├─ ACTIVE → 继续执行
    └─ INACTIVE/DELETED → 跳过，不删除 Redis ZSet 中已打点数据
 
-4. 原子状态抢占
+3. 原子状态抢占
    ├─ PENDING -> RUNNING 更新成功 → 获得回调执行权
    └─ 更新行数为 0 → 已被领取或完成，跳过
 
-5. 使用固定 `12s` 超时执行 HTTP 回调
+4. 使用固定 `12s` 超时执行 HTTP 回调
    ├─ 成功 → 记录 response_code/response_body
    └─ 失败 → 标记为 FAILED
 
-6. 后处理
-   - 执行成功 → Bloom Filter 打点，用于后续快速过滤
+5. 后处理
    - 更新 MySQL 记录
    - 上报 Prometheus 指标
 ```

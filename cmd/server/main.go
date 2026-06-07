@@ -15,7 +15,6 @@ import (
 	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/handler"
 	"github.com/chronoflow/internal/middleware"
-	"github.com/chronoflow/internal/pkg/bloom"
 	"github.com/chronoflow/internal/pkg/cron"
 	"github.com/chronoflow/internal/pkg/memory"
 	"github.com/chronoflow/internal/pkg/metrics"
@@ -66,9 +65,6 @@ func main() {
 	// Redis 任务队列
 	queue := redisqueue.NewRedisQueue(redisClient)
 
-	// Bloom Filter
-	bloomFilter := bloom.NewFilter(redisClient)
-
 	// 内存缓存（最大 10000 条）
 	timerCache := memory.NewTimerCache(10000)
 	timerCacheTTL := time.Duration(cfg.Scheduler.Step2Duration) * time.Second
@@ -101,9 +97,9 @@ func main() {
 	)
 
 	// ========== 8. 初始化服务层 ==========
-	// 执行器（Bloom 快速过滤，MySQL 条件状态更新授予唯一执行权）
+	// 执行器（MySQL 条件状态更新授予唯一执行权）
 	executor := service.NewExecutor(
-		defRepo, recRepo, bloomFilter, timerCache,
+		defRepo, recRepo, timerCache,
 		reporter, timerCacheTTL,
 	)
 

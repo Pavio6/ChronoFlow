@@ -19,7 +19,7 @@ ChronoFlow 核心思想是**时间分片 + 分桶并发 + 三级存储**。
 │  Scheduler →[扫描池] Trigger →[执行池] Executor   │
 ├─────────────────────────────────────────────────┤
 │                  基础设施层                        │
-│  Cron Parser | Bloom Filter | Memory Cache       │
+│  Cron Parser | Memory Cache | Metrics             │
 │  Redis Queue | Metrics                           │
 │  Scheduler Pool | Trigger Pool (ants)             │
 ├─────────────────────────────────────────────────┤
@@ -118,16 +118,14 @@ Scheduler 每次轮询都会为有任务的分片提交 worker 尝试抢锁，�
 
 ### 4. Executor（执行器）
 
-**职责**：执行单个定时任务，Bloom Filter 加速重复任务过滤，数据库状态抢占保证执行权唯一。
+**职责**：执行单个定时任务，数据库状态抢占保证执行权唯一。
 
 **核心流程**：
-1. 查询 Bloom Filter；命中时查询 MySQL 状态确认，已处理任务直接跳过
-2. 查询完整的定时器定义（先内存缓存，miss 再 MySQL）
-3. 使用定义中的状态判断是否执行（INACTIVE/DELETED 则跳过）
-4. 以条件更新原子抢占 `PENDING -> RUNNING`；抢占失败直接跳过
-5. 通过固定 `12s` 超时的 HTTP client 执行回调；超时按失败处理
-6. 根据结果更新状态（SUCCESS/FAILED）
-7. 执行成功 → Bloom Filter 打点，为后续重复派发提供快速过滤
+1. 查询完整的定时器定义（先内存缓存，miss 再 MySQL）
+2. 使用定义中的状态判断是否执行（INACTIVE/DELETED 则跳过）
+3. 以条件更新原子抢占 `PENDING -> RUNNING`；抢占失败直接跳过
+4. 通过固定 `12s` 超时的 HTTP client 执行回调；超时按失败处理
+5. 根据结果更新状态（SUCCESS/FAILED）
 
 **定时器定义约束**：定义创建后不可修改，仅允许激活、停用和删除；如需修改 Cron 或回调配置，删除原定义并新建定时器。停用或删除仅修改 MySQL 状态，不移除已经写入 Redis ZSet 的任务点。Executor 使用带状态的节点本地定义缓存判断是否执行，以减少完整定义回源；因此状态变更采用最终一致性，最晚在一个 `step2_duration` 缓存周期后反映到已经缓存该定时器的执行节点。
 

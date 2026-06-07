@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/chronoflow/internal/model"
-	"github.com/chronoflow/internal/pkg/bloom"
 	"github.com/chronoflow/internal/pkg/memory"
 	"github.com/chronoflow/internal/pkg/metrics"
 	"github.com/chronoflow/internal/pkg/redis"
@@ -24,16 +23,14 @@ const httpCallbackTimeout = 12 * time.Second
 // Executor 执行器
 // 被 Trigger 启动后，执行单个定时任务
 // 核心流程：
-//  1. Bloom Filter 快速过滤已成功执行任务；命中后由 MySQL 确认
-//  2. 查询完整的定时器定义（先内存缓存，miss 再 MySQL）
-//  3. 使用定义中的状态判断是否仍处于 ACTIVE；缓存状态允许在 TTL 内滞后
-//  4. 原子抢占执行记录：只有 PENDING -> RUNNING 成功的执行器继续
-//  5. 使用固定 12 秒超时执行 HTTP 回调
-//  6. 执行成功后写 Bloom Filter，并更新 MySQL 最终状态
+//  1. 查询完整的定时器定义（先内存缓存，miss 再 MySQL）
+//  2. 使用定义中的状态判断是否仍处于 ACTIVE；缓存状态允许在 TTL 内滞后
+//  3. 原子抢占执行记录：只有 PENDING -> RUNNING 成功的执行器继续
+//  4. 使用固定 12 秒超时执行 HTTP 回调
+//  5. 更新 MySQL 最终状态
 type Executor struct {
 	defRepo    repository.TimerDefinitionRepository
 	recRepo    repository.TimerRecordRepository
-	bloom      *bloom.Filter
 	cache      *memory.TimerCache
 	reporter   *metrics.Reporter
 	httpClient *http.Client
@@ -44,7 +41,6 @@ type Executor struct {
 func NewExecutor(
 	defRepo repository.TimerDefinitionRepository,
 	recRepo repository.TimerRecordRepository,
-	bloom *bloom.Filter,
 	cache *memory.TimerCache,
 	reporter *metrics.Reporter,
 	cacheTTL time.Duration,
@@ -52,7 +48,6 @@ func NewExecutor(
 	return &Executor{
 		defRepo:    defRepo,
 		recRepo:    recRepo,
-		bloom:      bloom,
 		cache:      cache,
 		reporter:   reporter,
 		httpClient: &http.Client{Timeout: httpCallbackTimeout},
@@ -73,33 +68,7 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 		zap.Time("trigger_time", triggerTime),
 	)
 
-	bloomKey := fmt.Sprintf("%s%s", redis.BloomPrefix, triggerTime.Format("2006-01-02"))
-	bloomVal := fmt.Sprintf("%d:%d", timerID, triggerTime.UnixMilli())
-
-	// Bloom Filter 命中时再由 MySQL 确认，避免误判造成漏执行。
-	mightExist, err := e.bloom.Exist(ctx, bloomKey, bloomVal)
-	if err != nil {
-		logger.Warn("Executor Bloom Filter 查询失败，继续使用数据库抢占",
-			zap.Int64("timer_id", timerID),
-			zap.Error(err),
-		)
-	} else if mightExist {
-		started, err := e.recRepo.HasStartedByTimerIDAndTriggerTime(timerID, triggerTime)
-		if err != nil {
-			logger.Warn("Executor Bloom 命中后的 MySQL 确认失败，继续使用数据库抢占",
-				zap.Int64("timer_id", timerID),
-				zap.Error(err),
-			)
-		} else if started {
-			logger.Debug("Executor Bloom 命中且任务已处理，跳过",
-				zap.Int64("timer_id", timerID),
-				zap.Time("trigger_time", triggerTime),
-			)
-			return
-		}
-	}
-
-	// 与 xTimer 一致，从包含状态的本地定义缓存读取；状态变更允许在缓存 TTL 内滞后。
+	// 从包含状态的本地定义缓存读取；状态变更允许在缓存 TTL 内滞后。
 	def := e.getTimerDefinition(ctx, timerID)
 	if def == nil {
 		logger.Warn("Executor 定时器定义不存在",
@@ -161,14 +130,6 @@ func (e *Executor) Execute(ctx context.Context, trigger *redis.TaskTrigger) {
 		record.Status = model.RecordStatusSuccess
 		record.ResponseCode = responseCode
 		record.ResponseBody = responseBody
-
-		// Bloom Filter 打点（仅成功时写入，避免失败任务被误判为已完成）
-		if err := e.bloom.Set(ctx, bloomKey, bloomVal, 86400); err != nil {
-			logger.Error("Executor Bloom Filter 设置失败",
-				zap.Int64("timer_id", timerID),
-				zap.Error(err),
-			)
-		}
 
 		e.reporter.ReportCallback(metrics.ResultSuccess, callbackDuration)
 
