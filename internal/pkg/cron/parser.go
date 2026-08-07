@@ -38,49 +38,11 @@ func (p *CronParser) NextTriggerTime(expr string, from time.Time) (time.Time, er
 	if err != nil {
 		return time.Time{}, err
 	}
-	return schedule.Next(from), nil
-}
-
-// NextNTriggerTimes 计算指定时间之后的 N 次触发时间
-func (p *CronParser) NextNTriggerTimes(expr string, from time.Time, n int) ([]time.Time, error) {
-	if n <= 0 {
-		return nil, fmt.Errorf("n 必须大于 0，当前值: %d", n)
+	next := schedule.Next(from)
+	if next.IsZero() {
+		return time.Time{}, fmt.Errorf("cron 表达式在可计算范围内没有下一次触发时间 [%s]", expr)
 	}
-
-	schedule, err := p.Parse(expr)
-	if err != nil {
-		return nil, err
-	}
-
-	times := make([]time.Time, 0, n)
-	current := from
-	for i := 0; i < n; i++ {
-		current = schedule.Next(current)
-		times = append(times, current)
-	}
-
-	return times, nil
-}
-
-// NextTriggerTimesBefore 计算 from 到 end 之间的所有触发时间
-func (p *CronParser) NextTriggerTimesBefore(expr string, from time.Time, end time.Time) ([]time.Time, error) {
-	schedule, err := p.Parse(expr)
-	if err != nil {
-		return nil, err
-	}
-
-	var times []time.Time
-	current := from
-	for {
-		next := schedule.Next(current)
-		if next.After(end) {
-			break
-		}
-		times = append(times, next)
-		current = next
-	}
-
-	return times, nil
+	return next, nil
 }
 
 // ValidateCronExpr 验证 Cron 表达式是否合法

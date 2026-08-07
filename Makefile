@@ -1,4 +1,4 @@
-.PHONY: dev-start demo-data dev-app dev-frontend clean docker-down docker-logs build-frontend build-backend build test-callback
+.PHONY: dev-start dev-app dev-api dev-scheduler dev-dispatcher dev-worker dev-frontend clean docker-down docker-logs build-frontend build-backend build test test-callback
 
 # 启动 Docker 基础依赖与可观测性栈；后端使用 make dev-app 单独启动
 dev-start:
@@ -12,20 +12,22 @@ dev-start:
 	@echo "  - Grafana: http://localhost:3001"
 	@echo "Now run: make dev-app (new terminal) and make dev-frontend (new terminal)"
 
-# 创建每分钟调用测试服务的演示任务，并通过正式 API 激活入队。
-# 运行前需先启动 make dev-app 与 make test-callback。
-#demo-data:
-#	@docker compose exec -T -e MYSQL_PWD=123456 mysql mysql -uroot chronoflow < migrations/002_demo_data.sql
-#	@docker compose exec -T redis redis-cli -n 1 DEL chronoflow:timer:demo-preview:0 chronoflow:timer:demo-preview:1 chronoflow:timer:demo-preview:2 chronoflow:bucket:demo-preview chronoflow:task_count:demo-preview chronoflow:scheduler_lock:demo-preview:1 >/dev/null
-#	@ids="$$(docker compose exec -T -e MYSQL_PWD=123456 mysql mysql -N -B -uroot chronoflow -e "SELECT id FROM timer_definitions WHERE app = 'demo-service' AND callback_body LIKE '%demo-data%' AND status = 'INACTIVE'")"; \
-#	for id in $$ids; do \
-#		curl -fsS -X POST "http://localhost:8080/api/v1/timers/$$id/activate" >/dev/null; \
-#	done
-#	@echo "演示任务已激活：每分钟真实调用 tests/callback-server 接口"
-
 # 启动后端服务
 dev-app:
-	go run cmd/server/main.go
+	go run ./cmd/chronoflow all
+
+# 独立角色启动入口；同一主机并行运行时需要为每个角色配置不同的 server.port
+dev-api:
+	CHRONOFLOW_SERVER_PORT=8080 go run ./cmd/chronoflow api
+
+dev-scheduler:
+	CHRONOFLOW_SERVER_PORT=8081 go run ./cmd/chronoflow scheduler
+
+dev-dispatcher:
+	CHRONOFLOW_SERVER_PORT=8082 go run ./cmd/chronoflow dispatcher
+
+dev-worker:
+	CHRONOFLOW_SERVER_PORT=8083 go run ./cmd/chronoflow worker
 
 # 启动前端开发服务器
 dev-frontend:
@@ -49,11 +51,15 @@ build-frontend:
 
 # 构建后端
 build-backend:
-	go build -o bin/chronoflow cmd/server/main.go
+	mkdir -p bin
+	go build -o bin/chronoflow ./cmd/chronoflow
 
 # 构建前端和后端
 build: build-frontend build-backend
 
+test:
+	go test -race ./...
+
 # 启动测试回调服务
 test-callback:
-	go run tests/callback-server/main.go
+	@echo "请提供一个可访问的 HTTP 测试回调服务，并在创建 Timer 时填写其 URL"

@@ -2,14 +2,13 @@ package logger
 
 import (
 	"os"
-	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
 )
 
-// 全局日志实例
-var log *zap.Logger
+// 默认使用空日志器，避免测试或初始化失败路径发生 nil panic。
+var log = zap.NewNop()
 
 // Init 初始化日志
 // level: debug, info, warn, error
@@ -81,49 +80,4 @@ func Error(msg string, fields ...zap.Field) {
 // Warn 警告日志
 func Warn(msg string, fields ...zap.Field) {
 	log.Warn(msg, fields...)
-}
-
-// Debug 调试日志
-func Debug(msg string, fields ...zap.Field) {
-	log.Debug(msg, fields...)
-}
-
-// Fatal 致命错误日志
-func Fatal(msg string, fields ...zap.Field) {
-	log.Fatal(msg, fields...)
-}
-
-// String 构建字符串类型的日志字段
-func String(key, val string) zap.Field {
-	return zap.String(key, val)
-}
-
-// Int 构建整数类型的日志字段
-func Int(key string, val int) zap.Field {
-	return zap.Int(key, val)
-}
-
-// Int64 构建 64 位整数类型的日志字段
-func Int64(key string, val int64) zap.Field {
-	return zap.Int64(key, val)
-}
-
-// Float64 构建浮点数类型的日志字段
-func Float64(key string, val float64) zap.Field {
-	return zap.Float64(key, val)
-}
-
-// Duration 构建时间间隔类型的日志字段
-func Duration(key string, val time.Duration) zap.Field {
-	return zap.Duration(key, val)
-}
-
-// Any 构建任意类型的日志字段
-func Any(key string, val interface{}) zap.Field {
-	return zap.Any(key, val)
-}
-
-// Bool 构建布尔类型的日志字段
-func Bool(key string, val bool) zap.Field {
-	return zap.Bool(key, val)
 }

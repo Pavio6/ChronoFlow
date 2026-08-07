@@ -22,7 +22,7 @@ RUN go mod download
 COPY . .
 COPY --from=frontend-builder /app/web/dist ./web/dist
 
-RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o chronoflow ./cmd/server
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o chronoflow ./cmd/chronoflow
 
 # 运行阶段
 FROM alpine:latest
@@ -35,6 +35,7 @@ COPY --from=backend-builder /app/chronoflow .
 COPY --from=backend-builder /app/web/dist ./web/dist
 COPY --from=backend-builder /app/config ./config
 
-EXPOSE 8080
+EXPOSE 8080 8081 8082 8083
 
-CMD ["./chronoflow"]
+ENTRYPOINT ["./chronoflow"]
+CMD ["all"]
