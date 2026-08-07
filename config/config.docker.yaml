@@ -2,38 +2,68 @@ server:
   port: 8080
   mode: release
 
+runtime:
+  shutdown_timeout_seconds: 15
+
 database:
-  driver: mysql
-  dsn: "root:123456@tcp(mysql:3306)/chronoflow?charset=utf8mb4&parseTime=True&loc=Local"
+  dsn: "root:123456@tcp(mysql:3306)/chronoflow?charset=utf8mb4&parseTime=True&loc=UTC"
+  auto_migrate: false
   max_open_conns: 100
   max_idle_conns: 10
   conn_max_lifetime: 60
+  log_level: warn
 
 redis:
   addr: "redis:6379"
   password: ""
   db: 1
-  pool_size: 100
 
 scheduler:
-  migrate_step_minutes: 60
-  step2_duration: 120
-  base_bucket_num: 1
-  bucket_num: 3
-  tasks_per_bucket: 100
-  bucket_metadata_ttl: 600
-  scan_interval: 1
-  lock_expiration: 70
-  success_expiration: 130
-  worker_pool_size: 16
+  poll_interval_ms: 500
+  batch_size: 100
+  misfire_grace_seconds: 5
+  default_max_catch_up: 10
 
-trigger:
-  worker_pool_size: 100
+outbox:
+  poll_interval_ms: 200
+  batch_size: 100
+  claim_ttl_seconds: 30
+  max_backoff_seconds: 30
+  stream: "chronoflow:execution:ready"
+  consumer_group: "chronoflow-workers"
+  stream_max_len: 0
+
+worker:
+  pool_size: 100
+  read_count: 20
+  read_block_ms: 2000
+  lease_ttl_seconds: 30
+  heartbeat_seconds: 10
+  reclaim_idle_seconds: 30
+  reclaim_interval_seconds: 10
+  http_timeout_seconds: 12
+  max_response_bytes: 1048576
+  retry_base_seconds: 2
+  retry_max_seconds: 60
+
+recovery:
+  enabled: true
+  scan_interval_seconds: 10
+  batch_size: 100
+  pending_stale_seconds: 30
+  cleanup_interval_minutes: 60
+  outbox_retention_days: 7
+  execution_retention_days: 30
+  stream_retention_hours: 24
+
+security:
+  api_key: ""
+  allowed_origins:
+    - "http://localhost:3000"
+  allow_private_callbacks: false
+  max_request_bytes: 1048576
 
 monitoring:
-  collect_interval_seconds: 10
-  pending_overdue_seconds: 120
-  running_stale_seconds: 60
   prometheus_url: "http://prometheus:9090"
   grafana_url: "http://grafana:3000"
 

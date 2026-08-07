@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/viper"
 )
@@ -9,10 +10,14 @@ import (
 // Config 应用全局配置
 type Config struct {
 	Server     ServerConfig     `mapstructure:"server"`
+	Runtime    RuntimeConfig    `mapstructure:"runtime"`
 	Database   DatabaseConfig   `mapstructure:"database"`
 	Redis      RedisConfig      `mapstructure:"redis"`
 	Scheduler  SchedulerConfig  `mapstructure:"scheduler"`
-	Trigger    TriggerConfig    `mapstructure:"trigger"`
+	Outbox     OutboxConfig     `mapstructure:"outbox"`
+	Worker     WorkerConfig     `mapstructure:"worker"`
+	Recovery   RecoveryConfig   `mapstructure:"recovery"`
+	Security   SecurityConfig   `mapstructure:"security"`
 	Monitoring MonitoringConfig `mapstructure:"monitoring"`
 	Log        LogConfig        `mapstructure:"log"`
 }
@@ -23,13 +28,19 @@ type ServerConfig struct {
 	Mode string `mapstructure:"mode"` // debug, release, test
 }
 
+// RuntimeConfig controls process lifecycle behavior shared by every role.
+type RuntimeConfig struct {
+	ShutdownTimeoutSeconds int `mapstructure:"shutdown_timeout_seconds"`
+}
+
 // DatabaseConfig 数据库配置
 type DatabaseConfig struct {
-	Driver          string `mapstructure:"driver"`
 	DSN             string `mapstructure:"dsn"`
+	AutoMigrate     bool   `mapstructure:"auto_migrate"`
 	MaxOpenConns    int    `mapstructure:"max_open_conns"`
 	MaxIdleConns    int    `mapstructure:"max_idle_conns"`
 	ConnMaxLifetime int    `mapstructure:"conn_max_lifetime"` // 分钟
+	LogLevel        string `mapstructure:"log_level"`
 }
 
 // RedisConfig Redis 配置
@@ -37,45 +48,66 @@ type RedisConfig struct {
 	Addr     string `mapstructure:"addr"`
 	Password string `mapstructure:"password"`
 	DB       int    `mapstructure:"db"`
-	PoolSize int    `mapstructure:"pool_size"`
 }
 
-// SchedulerConfig 调度器配置
-// migrate_step_minutes: Migrator 执行间隔（分钟）
-// step2_duration: 二级时间步（秒），本地定时器定义及状态缓存有效期
-// base_bucket_num: 每分钟初始扫描桶数
-// bucket_num: 每分钟允许扩展到的最大桶数
-// tasks_per_bucket: 每个桶承载的目标任务数，用于分钟级扩桶
-// bucket_metadata_ttl: 时间片结束后 Redis 队列及分桶元数据额外保留秒数
-// scan_interval: Scheduler 轮询间隔（秒）
-// lock_expiration: 分布式锁初始 TTL（秒），必须大于时间片时长（60 秒）
-// success_expiration: 分片扫描成功后的锁保留 TTL（秒），覆盖上一分钟回扫窗口
-// worker_pool_size: Scheduler 分片扫描协程池大小
+// SchedulerConfig controls the MySQL-authoritative due timer scanner.
 type SchedulerConfig struct {
-	MigrateStepMinutes int `mapstructure:"migrate_step_minutes"`
-	Step2Duration      int `mapstructure:"step2_duration"`
-	BaseBucketNum      int `mapstructure:"base_bucket_num"`
-	BucketNum          int `mapstructure:"bucket_num"`
-	TasksPerBucket     int `mapstructure:"tasks_per_bucket"`
-	BucketMetadataTTL  int `mapstructure:"bucket_metadata_ttl"`
-	ScanInterval       int `mapstructure:"scan_interval"`
-	LockExpiration     int `mapstructure:"lock_expiration"`
-	SuccessExpiration  int `mapstructure:"success_expiration"`
-	WorkerPoolSize     int `mapstructure:"worker_pool_size"`
+	PollIntervalMS      int `mapstructure:"poll_interval_ms"`
+	BatchSize           int `mapstructure:"batch_size"`
+	MisfireGraceSeconds int `mapstructure:"misfire_grace_seconds"`
+	DefaultMaxCatchUp   int `mapstructure:"default_max_catch_up"`
 }
 
-// TriggerConfig 触发器配置，控制 Executor HTTP 回调执行并发
-type TriggerConfig struct {
-	WorkerPoolSize int `mapstructure:"worker_pool_size"`
+// OutboxConfig controls reliable MySQL-to-Redis Stream publishing.
+type OutboxConfig struct {
+	PollIntervalMS    int    `mapstructure:"poll_interval_ms"`
+	BatchSize         int    `mapstructure:"batch_size"`
+	ClaimTTLSeconds   int    `mapstructure:"claim_ttl_seconds"`
+	MaxBackoffSeconds int    `mapstructure:"max_backoff_seconds"`
+	Stream            string `mapstructure:"stream"`
+	ConsumerGroup     string `mapstructure:"consumer_group"`
+	StreamMaxLen      int64  `mapstructure:"stream_max_len"`
+}
+
+// WorkerConfig controls Redis Stream consumption and callback execution.
+type WorkerConfig struct {
+	PoolSize               int   `mapstructure:"pool_size"`
+	ReadCount              int64 `mapstructure:"read_count"`
+	ReadBlockMS            int   `mapstructure:"read_block_ms"`
+	LeaseTTLSeconds        int   `mapstructure:"lease_ttl_seconds"`
+	HeartbeatSeconds       int   `mapstructure:"heartbeat_seconds"`
+	ReclaimIdleSeconds     int   `mapstructure:"reclaim_idle_seconds"`
+	ReclaimIntervalSeconds int   `mapstructure:"reclaim_interval_seconds"`
+	HTTPTimeoutSeconds     int   `mapstructure:"http_timeout_seconds"`
+	MaxResponseBytes       int64 `mapstructure:"max_response_bytes"`
+	RetryBaseSeconds       int   `mapstructure:"retry_base_seconds"`
+	RetryMaxSeconds        int   `mapstructure:"retry_max_seconds"`
+}
+
+// RecoveryConfig controls durable execution repair and retention cleanup.
+type RecoveryConfig struct {
+	Enabled                bool `mapstructure:"enabled"`
+	ScanIntervalSeconds    int  `mapstructure:"scan_interval_seconds"`
+	BatchSize              int  `mapstructure:"batch_size"`
+	PendingStaleSeconds    int  `mapstructure:"pending_stale_seconds"`
+	CleanupIntervalMinutes int  `mapstructure:"cleanup_interval_minutes"`
+	OutboxRetentionDays    int  `mapstructure:"outbox_retention_days"`
+	ExecutionRetentionDays int  `mapstructure:"execution_retention_days"`
+	StreamRetentionHours   int  `mapstructure:"stream_retention_hours"`
+}
+
+// SecurityConfig contains the deploy-time API and callback safety baseline.
+type SecurityConfig struct {
+	APIKey                string   `mapstructure:"api_key"`
+	AllowedOrigins        []string `mapstructure:"allowed_origins"`
+	AllowPrivateCallbacks bool     `mapstructure:"allow_private_callbacks"`
+	MaxRequestBytes       int64    `mapstructure:"max_request_bytes"`
 }
 
 // MonitoringConfig controls periodic collection of health gauges.
 type MonitoringConfig struct {
-	CollectIntervalSeconds int    `mapstructure:"collect_interval_seconds"`
-	PendingOverdueSeconds  int    `mapstructure:"pending_overdue_seconds"`
-	RunningStaleSeconds    int    `mapstructure:"running_stale_seconds"`
-	PrometheusURL          string `mapstructure:"prometheus_url"`
-	GrafanaURL             string `mapstructure:"grafana_url"`
+	PrometheusURL string `mapstructure:"prometheus_url"`
+	GrafanaURL    string `mapstructure:"grafana_url"`
 }
 
 // LogConfig 日志配置
@@ -98,7 +130,9 @@ func Load(configPath string) (*Config, error) {
 	// 设置默认值
 	setDefaults()
 
-	// 读取环境变量
+	// 读取 CHRONOFLOW_* 环境变量；嵌套配置中的点使用下划线。
+	viper.SetEnvPrefix("CHRONOFLOW")
+	viper.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	viper.AutomaticEnv()
 
 	if err := viper.ReadInConfig(); err != nil {
@@ -112,47 +146,132 @@ func Load(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("failed to unmarshal config: %w", err)
 	}
 	normalizeSchedulerConfig(&cfg.Scheduler)
-	normalizeTriggerConfig(&cfg.Trigger)
+	normalizeOutboxConfig(&cfg.Outbox)
+	normalizeWorkerConfig(&cfg.Worker)
+	normalizeRecoveryConfig(&cfg.Recovery)
+	normalizeSecurityConfig(&cfg.Security)
 	normalizeMonitoringConfig(&cfg.Monitoring)
-
+	normalizeRuntimeConfig(&cfg.Runtime)
 	AppConfig = cfg
 	return cfg, nil
 }
 
-func normalizeSchedulerConfig(cfg *SchedulerConfig) {
-	if cfg.BaseBucketNum < 1 {
-		cfg.BaseBucketNum = 1
-	}
-	if cfg.BucketNum < cfg.BaseBucketNum {
-		cfg.BucketNum = cfg.BaseBucketNum
-	}
-	if cfg.TasksPerBucket < 1 {
-		cfg.TasksPerBucket = 100
-	}
-	if cfg.BucketMetadataTTL < 1 {
-		cfg.BucketMetadataTTL = 600
-	}
-	if cfg.WorkerPoolSize < 1 {
-		cfg.WorkerPoolSize = 16
+func normalizeRuntimeConfig(cfg *RuntimeConfig) {
+	if cfg.ShutdownTimeoutSeconds < 1 {
+		cfg.ShutdownTimeoutSeconds = 15
 	}
 }
 
-func normalizeTriggerConfig(cfg *TriggerConfig) {
-	if cfg.WorkerPoolSize < 1 {
-		cfg.WorkerPoolSize = 100
+func normalizeSchedulerConfig(cfg *SchedulerConfig) {
+	if cfg.PollIntervalMS < 10 {
+		cfg.PollIntervalMS = 500
+	}
+	if cfg.BatchSize < 1 {
+		cfg.BatchSize = 100
+	}
+	if cfg.MisfireGraceSeconds < 0 {
+		cfg.MisfireGraceSeconds = 0
+	}
+	if cfg.DefaultMaxCatchUp < 1 {
+		cfg.DefaultMaxCatchUp = 10
+	}
+}
+
+func normalizeOutboxConfig(cfg *OutboxConfig) {
+	if cfg.PollIntervalMS < 10 {
+		cfg.PollIntervalMS = 200
+	}
+	if cfg.BatchSize < 1 {
+		cfg.BatchSize = 100
+	}
+	if cfg.ClaimTTLSeconds < 1 {
+		cfg.ClaimTTLSeconds = 30
+	}
+	if cfg.MaxBackoffSeconds < 1 {
+		cfg.MaxBackoffSeconds = 30
+	}
+	if cfg.Stream == "" {
+		cfg.Stream = "chronoflow:execution:ready"
+	}
+	if cfg.ConsumerGroup == "" {
+		cfg.ConsumerGroup = "chronoflow-workers"
+	}
+	if cfg.StreamMaxLen < 0 {
+		cfg.StreamMaxLen = 0
+	}
+}
+
+func normalizeWorkerConfig(cfg *WorkerConfig) {
+	if cfg.PoolSize < 1 {
+		cfg.PoolSize = 100
+	}
+	if cfg.ReadCount < 1 {
+		cfg.ReadCount = 20
+	}
+	if cfg.ReadBlockMS < 100 {
+		cfg.ReadBlockMS = 2000
+	}
+	if cfg.LeaseTTLSeconds < 3 {
+		cfg.LeaseTTLSeconds = 30
+	}
+	if cfg.HeartbeatSeconds < 1 ||
+		cfg.HeartbeatSeconds*2 >= cfg.LeaseTTLSeconds {
+		cfg.HeartbeatSeconds = cfg.LeaseTTLSeconds / 3
+	}
+	if cfg.ReclaimIdleSeconds < cfg.LeaseTTLSeconds {
+		cfg.ReclaimIdleSeconds = cfg.LeaseTTLSeconds
+	}
+	if cfg.ReclaimIntervalSeconds < 1 {
+		cfg.ReclaimIntervalSeconds = 10
+	}
+	if cfg.HTTPTimeoutSeconds < 1 {
+		cfg.HTTPTimeoutSeconds = 12
+	}
+	if cfg.MaxResponseBytes < 1 {
+		cfg.MaxResponseBytes = 1024 * 1024
+	}
+	if cfg.RetryBaseSeconds < 1 {
+		cfg.RetryBaseSeconds = 2
+	}
+	if cfg.RetryMaxSeconds < cfg.RetryBaseSeconds {
+		cfg.RetryMaxSeconds = 60
+	}
+}
+
+func normalizeRecoveryConfig(cfg *RecoveryConfig) {
+	if cfg.ScanIntervalSeconds < 1 {
+		cfg.ScanIntervalSeconds = 10
+	}
+	if cfg.BatchSize < 1 {
+		cfg.BatchSize = 100
+	}
+	if cfg.PendingStaleSeconds < 1 {
+		cfg.PendingStaleSeconds = 30
+	}
+	if cfg.CleanupIntervalMinutes < 1 {
+		cfg.CleanupIntervalMinutes = 60
+	}
+	if cfg.OutboxRetentionDays < 1 {
+		cfg.OutboxRetentionDays = 7
+	}
+	if cfg.ExecutionRetentionDays < cfg.OutboxRetentionDays {
+		cfg.ExecutionRetentionDays = 30
+	}
+	if cfg.StreamRetentionHours < 1 {
+		cfg.StreamRetentionHours = 24
+	}
+}
+
+func normalizeSecurityConfig(cfg *SecurityConfig) {
+	if len(cfg.AllowedOrigins) == 0 {
+		cfg.AllowedOrigins = []string{"http://localhost:3000"}
+	}
+	if cfg.MaxRequestBytes < 1 {
+		cfg.MaxRequestBytes = 1024 * 1024
 	}
 }
 
 func normalizeMonitoringConfig(cfg *MonitoringConfig) {
-	if cfg.CollectIntervalSeconds < 1 {
-		cfg.CollectIntervalSeconds = 10
-	}
-	if cfg.PendingOverdueSeconds < 1 {
-		cfg.PendingOverdueSeconds = 120
-	}
-	if cfg.RunningStaleSeconds < 1 {
-		cfg.RunningStaleSeconds = 60
-	}
 	if cfg.PrometheusURL == "" {
 		cfg.PrometheusURL = "http://localhost:9090"
 	}
@@ -167,37 +286,66 @@ func setDefaults() {
 	viper.SetDefault("server.port", 8080)
 	viper.SetDefault("server.mode", "debug")
 
+	// 进程生命周期默认配置
+	viper.SetDefault("runtime.shutdown_timeout_seconds", 15)
+
 	// 数据库默认配置
-	viper.SetDefault("database.driver", "mysql")
+	viper.SetDefault("database.auto_migrate", false)
 	viper.SetDefault("database.max_open_conns", 100)
 	viper.SetDefault("database.max_idle_conns", 10)
 	viper.SetDefault("database.conn_max_lifetime", 60)
+	viper.SetDefault("database.log_level", "warn")
 
 	// Redis 默认配置
 	viper.SetDefault("redis.addr", "127.0.0.1:6379")
 	viper.SetDefault("redis.password", "")
 	viper.SetDefault("redis.db", 0)
-	viper.SetDefault("redis.pool_size", 100)
 
 	// 调度器默认配置
-	viper.SetDefault("scheduler.migrate_step_minutes", 60) // 60 分钟
-	viper.SetDefault("scheduler.step2_duration", 120)      // 2 分钟
-	viper.SetDefault("scheduler.base_bucket_num", 1)
-	viper.SetDefault("scheduler.bucket_num", 3)            // 动态分桶最大桶数
-	viper.SetDefault("scheduler.tasks_per_bucket", 100)    // 每 100 个投递任务扩一个桶
-	viper.SetDefault("scheduler.bucket_metadata_ttl", 600) // 时间片结束后保留 10 分钟
-	viper.SetDefault("scheduler.scan_interval", 1)         // 1 秒
-	viper.SetDefault("scheduler.lock_expiration", 70)      // 70 秒
-	viper.SetDefault("scheduler.success_expiration", 130)  // 130 秒，分片成功扫描后的保留 TTL
-	viper.SetDefault("scheduler.worker_pool_size", 16)     // 分片扫描并发
+	viper.SetDefault("scheduler.poll_interval_ms", 500)
+	viper.SetDefault("scheduler.batch_size", 100)
+	viper.SetDefault("scheduler.misfire_grace_seconds", 5)
+	viper.SetDefault("scheduler.default_max_catch_up", 10)
 
-	// 触发器默认配置
-	viper.SetDefault("trigger.worker_pool_size", 100) // HTTP 回调并发
+	// Transactional Outbox 与 Redis Streams
+	viper.SetDefault("outbox.poll_interval_ms", 200)
+	viper.SetDefault("outbox.batch_size", 100)
+	viper.SetDefault("outbox.claim_ttl_seconds", 30)
+	viper.SetDefault("outbox.max_backoff_seconds", 30)
+	viper.SetDefault("outbox.stream", "chronoflow:execution:ready")
+	viper.SetDefault("outbox.consumer_group", "chronoflow-workers")
+	viper.SetDefault("outbox.stream_max_len", 0)
+
+	// Redis Streams Worker
+	viper.SetDefault("worker.pool_size", 100)
+	viper.SetDefault("worker.read_count", 20)
+	viper.SetDefault("worker.read_block_ms", 2000)
+	viper.SetDefault("worker.lease_ttl_seconds", 30)
+	viper.SetDefault("worker.heartbeat_seconds", 10)
+	viper.SetDefault("worker.reclaim_idle_seconds", 30)
+	viper.SetDefault("worker.reclaim_interval_seconds", 10)
+	viper.SetDefault("worker.http_timeout_seconds", 12)
+	viper.SetDefault("worker.max_response_bytes", 1024*1024)
+	viper.SetDefault("worker.retry_base_seconds", 2)
+	viper.SetDefault("worker.retry_max_seconds", 60)
+
+	// Reconciler and retention cleanup
+	viper.SetDefault("recovery.enabled", true)
+	viper.SetDefault("recovery.scan_interval_seconds", 10)
+	viper.SetDefault("recovery.batch_size", 100)
+	viper.SetDefault("recovery.pending_stale_seconds", 30)
+	viper.SetDefault("recovery.cleanup_interval_minutes", 60)
+	viper.SetDefault("recovery.outbox_retention_days", 7)
+	viper.SetDefault("recovery.execution_retention_days", 30)
+	viper.SetDefault("recovery.stream_retention_hours", 24)
+
+	// API and callback safety baseline
+	viper.SetDefault("security.api_key", "")
+	viper.SetDefault("security.allowed_origins", []string{"http://localhost:3000"})
+	viper.SetDefault("security.allow_private_callbacks", false)
+	viper.SetDefault("security.max_request_bytes", 1024*1024)
 
 	// 可观测性采集默认配置
-	viper.SetDefault("monitoring.collect_interval_seconds", 10)
-	viper.SetDefault("monitoring.pending_overdue_seconds", 120)
-	viper.SetDefault("monitoring.running_stale_seconds", 60)
 	viper.SetDefault("monitoring.prometheus_url", "http://localhost:9090")
 	viper.SetDefault("monitoring.grafana_url", "http://localhost:3001")
 
