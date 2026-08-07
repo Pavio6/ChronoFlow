@@ -5,6 +5,7 @@ import (
 
 	"github.com/chronoflow/pkg/logger"
 	"github.com/gin-gonic/gin"
+	"go.uber.org/zap"
 )
 
 // Logger 返回一个 Gin 中间件，用于记录每个请求的详细信息
@@ -24,11 +25,11 @@ func Logger() gin.HandlerFunc {
 
 		// 使用 zap 日志记录请求详情
 		logger.Info("HTTP 请求",
-			logger.String("method", c.Request.Method),        // 请求方法（GET、POST 等）
-			logger.String("path", c.Request.URL.Path),        // 请求路径
-			logger.Int("status", statusCode),                 // 响应状态码
-			logger.Duration("latency", latency),              // 请求处理耗时
-			logger.String("client_ip", c.ClientIP()),         // 客户端 IP 地址
+			zap.String("method", c.Request.Method),
+			zap.String("path", c.Request.URL.Path),
+			zap.Int("status", statusCode),
+			zap.Duration("latency", latency),
+			zap.String("client_ip", c.ClientIP()),
 		)
 	}
 }

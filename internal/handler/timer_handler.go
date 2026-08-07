@@ -10,7 +10,7 @@ import (
 )
 
 // TimerHandler 定时器 HTTP API 处理器
-// 提供定时器定义和执行记录的 RESTful API
+// 提供定时器定义的 RESTful API
 type TimerHandler struct {
 	timerSvc *service.TimerService
 }
@@ -35,10 +35,6 @@ func (h *TimerHandler) RegisterRoutes(r *gin.Engine) {
 		api.POST("/timers/:id/activate", h.ActivateTimer)
 		api.POST("/timers/:id/deactivate", h.DeactivateTimer)
 
-		// 执行记录查询
-		api.GET("/timers/:id/records", h.GetTimerRecords)
-		api.GET("/records", h.ListRecords)
-		api.GET("/records/:id", h.GetRecord)
 	}
 }
 
@@ -199,95 +195,6 @@ func (h *TimerHandler) DeactivateTimer(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"code":    http.StatusOK,
 		"message": "停用成功",
-	})
-}
-
-// GetTimerRecords 获取指定定时器的执行记录
-// GET /api/v1/timers/:id/records
-func (h *TimerHandler) GetTimerRecords(c *gin.Context) {
-	id, err := parseID(c, "id")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    http.StatusBadRequest,
-			"message": "无效的 ID",
-		})
-		return
-	}
-
-	// 获取 limit 参数
-	limit := 20
-	if limitStr := c.Query("limit"); limitStr != "" {
-		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
-			limit = l
-		}
-	}
-
-	records, err := h.timerSvc.GetRecords(id, limit)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    http.StatusInternalServerError,
-			"message": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code": http.StatusOK,
-		"data": records,
-	})
-}
-
-// ListRecords 查询执行记录列表
-// GET /api/v1/records
-func (h *TimerHandler) ListRecords(c *gin.Context) {
-	var req model.RecordListRequest
-	if err := c.ShouldBindQuery(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    http.StatusBadRequest,
-			"message": "请求参数无效: " + err.Error(),
-		})
-		return
-	}
-
-	resp, err := h.timerSvc.ListRecords(&req)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"code":    http.StatusInternalServerError,
-			"message": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code": http.StatusOK,
-		"data": resp,
-	})
-}
-
-// GetRecord 获取执行记录详情
-// GET /api/v1/records/:id
-func (h *TimerHandler) GetRecord(c *gin.Context) {
-	id, err := parseID(c, "id")
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"code":    http.StatusBadRequest,
-			"message": "无效的 ID",
-		})
-		return
-	}
-
-	record, err := h.timerSvc.GetRecord(id)
-	if err != nil {
-		c.JSON(http.StatusNotFound, gin.H{
-			"code":    http.StatusNotFound,
-			"message": err.Error(),
-		})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"code": http.StatusOK,
-		"data": record,
 	})
 }
 

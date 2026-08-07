@@ -2,6 +2,7 @@ package repository
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/chronoflow/internal/model"
 	"gorm.io/gorm"
@@ -20,10 +21,8 @@ type TimerDefinitionRepository interface {
 	List(req *model.TimerDefinitionListRequest) ([]*model.TimerDefinition, int64, error)
 	// CountListByStatus 按列表筛选条件统计可见定时器状态
 	CountListByStatus(req *model.TimerDefinitionListRequest) (map[model.TimerStatus]int64, error)
-	// GetActiveDefinitions 获取所有激活状态的定时器定义
-	GetActiveDefinitions() ([]*model.TimerDefinition, error)
-	// UpdateStatus 更新定时器定义状态
-	UpdateStatus(id int64, status model.TimerStatus) error
+	// UpdateScheduleState conditionally changes status and next_fire_at.
+	UpdateScheduleState(id int64, from, to model.TimerStatus, nextFireAt *time.Time) error
 	// CountByStatus 按定时器状态统计数量
 	CountByStatus() (map[model.TimerStatus]int64, error)
 }
@@ -64,12 +63,40 @@ func (r *timerDefinitionRepo) GetByID(id int64) (*model.TimerDefinition, error) 
 func (r *timerDefinitionRepo) Delete(id int64) error {
 	result := r.db.Model(&model.TimerDefinition{}).
 		Where("id = ? AND status != ?", id, model.TimerStatusDeleted).
-		Update("status", model.TimerStatusDeleted)
+		Updates(map[string]any{
+			"status":       model.TimerStatusDeleted,
+			"next_fire_at": nil,
+			"version":      gorm.Expr("version + 1"),
+		})
 	if result.Error != nil {
 		return fmt.Errorf("删除定时器定义失败: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
 		return fmt.Errorf("定时器定义不存在或已被删除，id=%d", id)
+	}
+	return nil
+}
+
+// UpdateScheduleState applies a state transition without allowing concurrent
+// activation/deactivation requests to overwrite each other.
+func (r *timerDefinitionRepo) UpdateScheduleState(
+	id int64,
+	from model.TimerStatus,
+	to model.TimerStatus,
+	nextFireAt *time.Time,
+) error {
+	result := r.db.Model(&model.TimerDefinition{}).
+		Where("id = ? AND status = ?", id, from).
+		Updates(map[string]any{
+			"status":       to,
+			"next_fire_at": nextFireAt,
+			"version":      gorm.Expr("version + 1"),
+		})
+	if result.Error != nil {
+		return fmt.Errorf("更新定时器调度状态失败: %w", result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return fmt.Errorf("定时器状态已变化或不存在，id=%d, expected=%s", id, from)
 	}
 	return nil
 }
@@ -147,30 +174,6 @@ func (r *timerDefinitionRepo) CountListByStatus(req *model.TimerDefinitionListRe
 		result[item.Status] = item.Count
 	}
 	return result, nil
-}
-
-// GetActiveDefinitions 获取所有激活状态的定时器定义
-// 用于调度器加载需要执行的定时器
-func (r *timerDefinitionRepo) GetActiveDefinitions() ([]*model.TimerDefinition, error) {
-	var items []*model.TimerDefinition
-	if err := r.db.Where("status = ?", model.TimerStatusActive).Find(&items).Error; err != nil {
-		return nil, fmt.Errorf("查询激活状态的定时器定义失败: %w", err)
-	}
-	return items, nil
-}
-
-// UpdateStatus 更新定时器定义状态
-func (r *timerDefinitionRepo) UpdateStatus(id int64, status model.TimerStatus) error {
-	result := r.db.Model(&model.TimerDefinition{}).
-		Where("id = ?", id).
-		Update("status", status)
-	if result.Error != nil {
-		return fmt.Errorf("更新定时器定义状态失败: %w", result.Error)
-	}
-	if result.RowsAffected == 0 {
-		return fmt.Errorf("定时器定义不存在，id=%d", id)
-	}
-	return nil
 }
 
 // CountByStatus 按定时器状态统计数量
