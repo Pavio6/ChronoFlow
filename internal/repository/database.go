@@ -2,13 +2,16 @@ package repository
 
 import (
 	"fmt"
+	stdlog "log"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/model"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
-	"gorm.io/gorm/logger"
+	gormlogger "gorm.io/gorm/logger"
 )
 
 // DB 全局数据库连接实例
@@ -21,7 +24,16 @@ func InitDatabase(cfg *config.DatabaseConfig) error {
 
 	// 使用 GORM 打开 MySQL 连接，关闭默认事务以提升性能
 	DB, err = gorm.Open(mysql.Open(cfg.DSN), &gorm.Config{
-		Logger:                                   logger.Default.LogMode(logger.Info),
+		Logger: gormlogger.New(
+			stdlog.New(os.Stdout, "\r\n", stdlog.LstdFlags),
+			gormlogger.Config{
+				SlowThreshold:             time.Second,
+				LogLevel:                  databaseLogLevel(cfg.LogLevel),
+				IgnoreRecordNotFoundError: true,
+				ParameterizedQueries:      true,
+				Colorful:                  false,
+			},
+		),
 		DisableForeignKeyConstraintWhenMigrating: true,
 	})
 	if err != nil {
@@ -46,6 +58,19 @@ func InitDatabase(cfg *config.DatabaseConfig) error {
 	return nil
 }
 
+func databaseLogLevel(value string) gormlogger.LogLevel {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "silent":
+		return gormlogger.Silent
+	case "error":
+		return gormlogger.Error
+	case "info":
+		return gormlogger.Info
+	default:
+		return gormlogger.Warn
+	}
+}
+
 // AutoMigrate 自动迁移数据库表结构
 // 根据模型定义自动创建或更新表结构
 func AutoMigrate() error {
@@ -53,10 +78,10 @@ func AutoMigrate() error {
 		return fmt.Errorf("数据库未初始化，请先调用 InitDatabase")
 	}
 
-	// 自动迁移 TimerDefinition 和 TimerRecord 模型
 	err := DB.AutoMigrate(
 		&model.TimerDefinition{},
-		&model.TimerRecord{},
+		&model.TimerExecution{},
+		&model.OutboxEvent{},
 	)
 	if err != nil {
 		return fmt.Errorf("自动迁移数据库表结构失败: %w", err)

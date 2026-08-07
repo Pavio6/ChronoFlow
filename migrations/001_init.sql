@@ -1,5 +1,5 @@
--- ChronoFlow 数据库初始化脚本
--- 基于 xTimer 架构的定时器定义与执行记录分离模型
+-- ChronoFlow 历史基础迁移。
+-- 当前完整结构需要按顺序继续执行 002、003、004；不要只执行本文件。
 
 -- 创建数据库（如果不存在）
 CREATE DATABASE IF NOT EXISTS chronoflow
@@ -26,8 +26,8 @@ CREATE TABLE IF NOT EXISTS timer_definitions (
     INDEX idx_app(app)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='定时器定义表';
 
--- 定时器执行记录表
--- 存储每次定时任务的执行详情，包括请求/响应信息等
+-- 旧执行记录表仅用于既有环境的可升级迁移链。
+-- 当前系统使用 timer_executions；004 会删除本表。
 CREATE TABLE IF NOT EXISTS timer_records (
     id              BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '记录ID',
     timer_id        BIGINT NOT NULL COMMENT '定时器ID',
