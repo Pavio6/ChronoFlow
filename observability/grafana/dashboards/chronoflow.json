@@ -22,10 +22,11 @@
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
       "targets": [
-        { "expr": "chronoflow_records{status=\"PENDING\"}", "legendFormat": "等待执行", "refId": "A" },
-        { "expr": "chronoflow_records{status=\"RUNNING\"}", "legendFormat": "执行中", "refId": "B" },
-        { "expr": "chronoflow_records{status=\"SUCCESS\"}", "legendFormat": "成功", "refId": "C" },
-        { "expr": "chronoflow_records{status=\"FAILED\"} > 0", "legendFormat": "失败", "refId": "D" }
+        { "expr": "chronoflow_executions{status=\"PENDING\"}", "legendFormat": "等待执行", "refId": "A" },
+        { "expr": "chronoflow_executions{status=\"RUNNING\"}", "legendFormat": "执行中", "refId": "B" },
+        { "expr": "chronoflow_executions{status=\"RETRY_WAIT\"}", "legendFormat": "等待重试", "refId": "C" },
+        { "expr": "chronoflow_executions{status=\"SUCCESS\"}", "legendFormat": "成功", "refId": "D" },
+        { "expr": "chronoflow_executions{status=\"FAILED\"}", "legendFormat": "失败", "refId": "E" }
       ],
       "title": "执行状态趋势",
       "type": "timeseries"
@@ -44,7 +45,8 @@
         "tooltip": { "mode": "multi", "sort": "desc" }
       },
       "targets": [
-        { "expr": "rate(chronoflow_callback_requests_total{result=\"success\"}[1m])", "legendFormat": "成功", "refId": "A" }
+        { "expr": "rate(chronoflow_worker_executions_total{result=\"success\"}[1m])", "legendFormat": "成功", "refId": "A" },
+        { "expr": "rate(chronoflow_worker_executions_total{result=\"failed\"}[1m])", "legendFormat": "失败尝试", "refId": "B" }
       ],
       "title": "真实回调请求速率",
       "type": "timeseries"
@@ -64,7 +66,7 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(chronoflow_callback_duration_seconds_bucket[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(chronoflow_worker_execution_duration_seconds_bucket[5m])))",
           "legendFormat": "P95 回调耗时",
           "refId": "A"
         }
@@ -86,9 +88,10 @@
         "tooltip": { "mode": "single", "sort": "none" }
       },
       "targets": [
-        { "expr": "chronoflow_redis_queue_items", "legendFormat": "待触发任务", "refId": "A" }
+        { "expr": "chronoflow_outbox_unpublished_count", "legendFormat": "Outbox 未发布", "refId": "A" },
+        { "expr": "chronoflow_worker_pending_messages", "legendFormat": "Consumer Pending", "refId": "B" }
       ],
-      "title": "Redis 待触发队列",
+      "title": "投递与消费积压",
       "type": "timeseries"
     }
   ],

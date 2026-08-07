@@ -70,14 +70,14 @@ groups:
               refId: C
               type: threshold
 
-      - uid: chronoflow-pending-overdue
-        title: ChronoFlow overdue pending records
+      - uid: chronoflow-execution-pending
+        title: ChronoFlow pending execution backlog
         condition: C
         for: 1m
         noDataState: NoData
         execErrState: Error
         annotations:
-          summary: Timer records are overdue but remain PENDING.
+          summary: Durable executions remain PENDING.
         labels:
           severity: warning
         data:
@@ -91,7 +91,7 @@ groups:
                 type: prometheus
                 uid: prometheus
               editorMode: code
-              expr: chronoflow_pending_overdue_records
+              expr: chronoflow_executions{status="PENDING"}
               instant: true
               intervalMs: 1000
               maxDataPoints: 43200
@@ -134,14 +134,14 @@ groups:
               refId: C
               type: threshold
 
-      - uid: chronoflow-running-stale
-        title: ChronoFlow stale running records
+      - uid: chronoflow-execution-running
+        title: ChronoFlow running execution backlog
         condition: C
         for: 1m
         noDataState: NoData
         execErrState: Error
         annotations:
-          summary: Timer records have remained RUNNING beyond the threshold.
+          summary: Durable executions remain RUNNING.
         labels:
           severity: warning
         data:
@@ -155,7 +155,199 @@ groups:
                 type: prometheus
                 uid: prometheus
               editorMode: code
-              expr: chronoflow_running_stale_records
+              expr: chronoflow_executions{status="RUNNING"}
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [C]
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              refId: C
+              type: threshold
+
+      - uid: chronoflow-outbox-backlog
+        title: ChronoFlow Outbox backlog
+        condition: C
+        for: 5m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Transactional Outbox events have remained unpublished.
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 900
+              to: 0
+            model:
+              datasource:
+                type: prometheus
+                uid: prometheus
+              editorMode: code
+              expr: chronoflow_outbox_unpublished_count
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              conditions:
+                - evaluator:
+                    params: [0]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [C]
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              refId: C
+              type: threshold
+
+      - uid: chronoflow-worker-pending
+        title: ChronoFlow Worker pending backlog
+        condition: C
+        for: 5m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Redis Consumer Group pending messages exceed the MVP threshold.
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 900
+              to: 0
+            model:
+              datasource:
+                type: prometheus
+                uid: prometheus
+              editorMode: code
+              expr: chronoflow_worker_pending_messages
+              instant: true
+              intervalMs: 1000
+              maxDataPoints: 43200
+              refId: A
+          - refId: B
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: A
+              reducer: last
+              refId: B
+              type: reduce
+          - refId: C
+            datasourceUid: __expr__
+            relativeTimeRange:
+              from: 0
+              to: 0
+            model:
+              conditions:
+                - evaluator:
+                    params: [100]
+                    type: gt
+                  operator:
+                    type: and
+                  query:
+                    params: [C]
+                  reducer:
+                    params: []
+                    type: last
+                  type: query
+              datasource:
+                type: __expr__
+                uid: __expr__
+              expression: B
+              refId: C
+              type: threshold
+
+      - uid: chronoflow-recovery-failures
+        title: ChronoFlow recovery failures
+        condition: C
+        for: 1m
+        noDataState: NoData
+        execErrState: Error
+        annotations:
+          summary: Reconciler scans or retention cleanup are failing.
+        labels:
+          severity: warning
+        data:
+          - refId: A
+            datasourceUid: prometheus
+            relativeTimeRange:
+              from: 600
+              to: 0
+            model:
+              datasource:
+                type: prometheus
+                uid: prometheus
+              editorMode: code
+              expr: increase(chronoflow_recovery_failures_total[5m])
               instant: true
               intervalMs: 1000
               maxDataPoints: 43200

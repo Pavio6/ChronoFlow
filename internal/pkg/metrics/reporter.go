@@ -3,7 +3,6 @@ package metrics
 import (
 	"net/http"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -12,17 +11,25 @@ import (
 )
 
 const (
-	CallbackRequestsTotal   = "chronoflow_callback_requests_total"
-	CallbackDurationSeconds = "chronoflow_callback_duration_seconds"
-	Records                 = "chronoflow_records"
-	PendingOverdueRecords   = "chronoflow_pending_overdue_records"
-	RunningStaleRecords     = "chronoflow_running_stale_records"
-	RedisQueueItems         = "chronoflow_redis_queue_items"
-	RecordSuccessRate       = "chronoflow_record_success_rate_percent"
-	RecordDurationP95Ms     = "chronoflow_record_duration_p95_milliseconds"
+	SchedulerBatchesTotal   = "chronoflow_scheduler_batches_total"
+	SchedulerExecutions     = "chronoflow_scheduler_created_executions_total"
+	SchedulerDuplicates     = "chronoflow_scheduler_duplicate_executions_total"
+	SchedulerBatchDuration  = "chronoflow_scheduler_batch_duration_seconds"
+	OutboxPublishTotal      = "chronoflow_outbox_publish_total"
+	OutboxUnpublished       = "chronoflow_outbox_unpublished_count"
+	WorkerExecutionsTotal   = "chronoflow_worker_executions_total"
+	WorkerDurationSeconds   = "chronoflow_worker_execution_duration_seconds"
+	WorkerRetriesTotal      = "chronoflow_worker_retries_total"
+	WorkerLeaseLostTotal    = "chronoflow_worker_lease_lost_total"
+	WorkerRedeliveriesTotal = "chronoflow_worker_redeliveries_total"
+	WorkerPendingMessages   = "chronoflow_worker_pending_messages"
+	RecoveryActionsTotal    = "chronoflow_recovery_actions_total"
+	RecoveryFailuresTotal   = "chronoflow_recovery_failures_total"
+	Executions              = "chronoflow_executions"
 
 	LabelResult = "result"
 	LabelStatus = "status"
+	LabelAction = "action"
 
 	ResultSuccess = "success"
 	ResultFailed  = "failed"
@@ -30,31 +37,21 @@ const (
 
 // Reporter owns the low-cardinality metrics exported for monitoring.
 type Reporter struct {
-	callbackRequests   *prometheus.CounterVec
-	callbackDuration   *prometheus.HistogramVec
-	records            *prometheus.GaugeVec
-	pendingOverdue     prometheus.Gauge
-	runningStale       prometheus.Gauge
-	redisQueueItems    prometheus.Gauge
-	recordSuccessRate  prometheus.Gauge
-	recordDurationP95  prometheus.Gauge
-	execTotalCount     atomic.Int64
-	execSuccessCount   atomic.Int64
-	execFailedCount    atomic.Int64
-	triggerTotalCount  atomic.Int64
-	durationTotalNanos atomic.Int64
-	durationCount      atomic.Int64
-}
-
-// Snapshot is the current process-local summary used by the existing monitoring page.
-type Snapshot struct {
-	ExecTotal        int64   `json:"exec_total"`
-	ExecSuccess      int64   `json:"exec_success"`
-	ExecFailed       int64   `json:"exec_failed"`
-	TriggerTotal     int64   `json:"trigger_total"`
-	AvgDurationMs    float64 `json:"avg_duration_ms"`
-	SuccessRate      float64 `json:"success_rate"`
-	LastCollectedMsg string  `json:"last_collected_msg"`
+	schedulerBatches       *prometheus.CounterVec
+	schedulerExecutions    prometheus.Counter
+	schedulerDuplicates    prometheus.Counter
+	schedulerBatchDuration prometheus.Histogram
+	outboxPublish          *prometheus.CounterVec
+	outboxUnpublished      prometheus.Gauge
+	workerExecutions       *prometheus.CounterVec
+	workerDuration         *prometheus.HistogramVec
+	workerRetries          prometheus.Counter
+	workerLeaseLost        prometheus.Counter
+	workerRedeliveries     prometheus.Counter
+	workerPending          prometheus.Gauge
+	recoveryActions        *prometheus.CounterVec
+	recoveryFailures       prometheus.Counter
+	executions             *prometheus.GaugeVec
 }
 
 var (
@@ -66,116 +63,154 @@ var (
 func NewReporter() *Reporter {
 	reporterOnce.Do(func() {
 		reporterInstance = &Reporter{
-			callbackRequests: promauto.NewCounterVec(prometheus.CounterOpts{
-				Name: CallbackRequestsTotal,
-				Help: "Total number of callback requests by result.",
+			schedulerBatches: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: SchedulerBatchesTotal,
+				Help: "Total scheduler batches by result.",
 			}, []string{LabelResult}),
-			callbackDuration: promauto.NewHistogramVec(prometheus.HistogramOpts{
-				Name:    CallbackDurationSeconds,
-				Help:    "Callback request latency in seconds by result.",
+			schedulerExecutions: promauto.NewCounter(prometheus.CounterOpts{
+				Name: SchedulerExecutions,
+				Help: "Total durable executions created by the scheduler.",
+			}),
+			schedulerDuplicates: promauto.NewCounter(prometheus.CounterOpts{
+				Name: SchedulerDuplicates,
+				Help: "Total duplicate execution insertions prevented by the unique constraint.",
+			}),
+			schedulerBatchDuration: promauto.NewHistogram(prometheus.HistogramOpts{
+				Name:    SchedulerBatchDuration,
+				Help:    "Scheduler transaction batch duration in seconds.",
+				Buckets: prometheus.DefBuckets,
+			}),
+			outboxPublish: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: OutboxPublishTotal,
+				Help: "Total Outbox publish attempts by result.",
+			}, []string{LabelResult}),
+			outboxUnpublished: promauto.NewGauge(prometheus.GaugeOpts{
+				Name: OutboxUnpublished,
+				Help: "Current number of unpublished Outbox events.",
+			}),
+			workerExecutions: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: WorkerExecutionsTotal,
+				Help: "Total Worker callback attempts by result.",
+			}, []string{LabelResult}),
+			workerDuration: promauto.NewHistogramVec(prometheus.HistogramOpts{
+				Name:    WorkerDurationSeconds,
+				Help:    "Worker callback attempt duration in seconds.",
 				Buckets: prometheus.DefBuckets,
 			}, []string{LabelResult}),
-			records: promauto.NewGaugeVec(prometheus.GaugeOpts{
-				Name: Records,
-				Help: "Current timer record count by status.",
+			workerRetries: promauto.NewCounter(prometheus.CounterOpts{
+				Name: WorkerRetriesTotal,
+				Help: "Total execution retries scheduled.",
+			}),
+			workerLeaseLost: promauto.NewCounter(prometheus.CounterOpts{
+				Name: WorkerLeaseLostTotal,
+				Help: "Total Worker attempts that lost their MySQL Lease.",
+			}),
+			workerRedeliveries: promauto.NewCounter(prometheus.CounterOpts{
+				Name: WorkerRedeliveriesTotal,
+				Help: "Total Redis Pending messages reclaimed by Workers.",
+			}),
+			workerPending: promauto.NewGauge(prometheus.GaugeOpts{
+				Name: WorkerPendingMessages,
+				Help: "Current Redis Consumer Group pending message count.",
+			}),
+			recoveryActions: promauto.NewCounterVec(prometheus.CounterOpts{
+				Name: RecoveryActionsTotal,
+				Help: "Total durable recovery actions by type.",
+			}, []string{LabelAction}),
+			recoveryFailures: promauto.NewCounter(prometheus.CounterOpts{
+				Name: RecoveryFailuresTotal,
+				Help: "Total Reconciler scan or cleanup failures.",
+			}),
+			executions: promauto.NewGaugeVec(prometheus.GaugeOpts{
+				Name: Executions,
+				Help: "Current durable execution count by status.",
 			}, []string{LabelStatus}),
-			pendingOverdue: promauto.NewGauge(prometheus.GaugeOpts{
-				Name: PendingOverdueRecords,
-				Help: "Current number of overdue PENDING timer records.",
-			}),
-			runningStale: promauto.NewGauge(prometheus.GaugeOpts{
-				Name: RunningStaleRecords,
-				Help: "Current number of stale RUNNING timer records.",
-			}),
-			redisQueueItems: promauto.NewGauge(prometheus.GaugeOpts{
-				Name: RedisQueueItems,
-				Help: "Current total number of items in ChronoFlow Redis queues.",
-			}),
-			recordSuccessRate: promauto.NewGauge(prometheus.GaugeOpts{
-				Name: RecordSuccessRate,
-				Help: "Success percentage of completed timer records currently stored in MySQL.",
-			}),
-			recordDurationP95: promauto.NewGauge(prometheus.GaugeOpts{
-				Name: RecordDurationP95Ms,
-				Help: "P95 duration in milliseconds of completed timer records currently stored in MySQL.",
-			}),
 		}
 		for _, result := range []string{ResultSuccess, ResultFailed} {
-			reporterInstance.callbackRequests.WithLabelValues(result).Add(0)
-			reporterInstance.callbackDuration.WithLabelValues(result)
+			reporterInstance.schedulerBatches.WithLabelValues(result).Add(0)
+			reporterInstance.outboxPublish.WithLabelValues(result).Add(0)
+			reporterInstance.workerExecutions.WithLabelValues(result).Add(0)
+			reporterInstance.workerDuration.WithLabelValues(result)
+		}
+		for _, action := range []string{"reenqueue", "expired_lease", "terminal_failure", "cleanup"} {
+			reporterInstance.recoveryActions.WithLabelValues(action).Add(0)
+		}
+		for _, status := range []string{
+			"PENDING",
+			"RUNNING",
+			"RETRY_WAIT",
+			"SUCCESS",
+			"FAILED",
+			"CANCELLED",
+		} {
+			reporterInstance.executions.WithLabelValues(status).Set(0)
 		}
 	})
 	return reporterInstance
 }
 
-// ReportCallback records one completed outbound callback.
-func (r *Reporter) ReportCallback(result string, duration time.Duration) {
-	r.callbackRequests.WithLabelValues(result).Inc()
-	r.callbackDuration.WithLabelValues(result).Observe(duration.Seconds())
-	r.execTotalCount.Add(1)
-	r.durationTotalNanos.Add(duration.Nanoseconds())
-	r.durationCount.Add(1)
-	if result == ResultSuccess {
-		r.execSuccessCount.Add(1)
-		return
+// ReportSchedulerBatch records one scheduler transaction.
+func (r *Reporter) ReportSchedulerBatch(
+	_ int,
+	executions int,
+	duplicates int,
+	duration time.Duration,
+	success bool,
+) {
+	result := ResultFailed
+	if success {
+		result = ResultSuccess
 	}
-	r.execFailedCount.Add(1)
+	r.schedulerBatches.WithLabelValues(result).Inc()
+	r.schedulerExecutions.Add(float64(executions))
+	r.schedulerDuplicates.Add(float64(duplicates))
+	r.schedulerBatchDuration.Observe(duration.Seconds())
 }
 
-// ReportTrigger maintains the process-local summary for the current management page.
-func (r *Reporter) ReportTrigger() {
-	r.triggerTotalCount.Add(1)
-}
-
-func (r *Reporter) SetRecordCount(status string, count int64) {
-	r.records.WithLabelValues(status).Set(float64(count))
-}
-
-func (r *Reporter) SetPendingOverdueRecords(count int64) {
-	r.pendingOverdue.Set(float64(count))
-}
-
-func (r *Reporter) SetRunningStaleRecords(count int64) {
-	r.runningStale.Set(float64(count))
-}
-
-func (r *Reporter) SetRedisQueueItems(count int64) {
-	r.redisQueueItems.Set(float64(count))
-}
-
-func (r *Reporter) SetRecordSuccessRate(value float64) {
-	r.recordSuccessRate.Set(value)
-}
-
-func (r *Reporter) SetRecordDurationP95Milliseconds(value float64) {
-	r.recordDurationP95.Set(value)
-}
-
-// Snapshot returns aggregated callback values for the current server process.
-func (r *Reporter) Snapshot() Snapshot {
-	execTotal := r.execTotalCount.Load()
-	durationCount := r.durationCount.Load()
-	success := r.execSuccessCount.Load()
-
-	var avgDuration float64
-	if durationCount > 0 {
-		avgDuration = float64(r.durationTotalNanos.Load()) / float64(durationCount) / float64(time.Millisecond)
+// ReportOutboxPublish records one Redis Stream publish attempt.
+func (r *Reporter) ReportOutboxPublish(success bool) {
+	result := ResultFailed
+	if success {
+		result = ResultSuccess
 	}
+	r.outboxPublish.WithLabelValues(result).Inc()
+}
 
-	var successRate float64
-	if execTotal > 0 {
-		successRate = float64(success) / float64(execTotal)
-	}
+func (r *Reporter) SetOutboxUnpublished(count int64) {
+	r.outboxUnpublished.Set(float64(count))
+}
 
-	return Snapshot{
-		ExecTotal:        execTotal,
-		ExecSuccess:      success,
-		ExecFailed:       r.execFailedCount.Load(),
-		TriggerTotal:     r.triggerTotalCount.Load(),
-		AvgDurationMs:    avgDuration,
-		SuccessRate:      successRate,
-		LastCollectedMsg: "runtime snapshot",
-	}
+func (r *Reporter) ReportWorkerExecution(result string, duration time.Duration) {
+	r.workerExecutions.WithLabelValues(result).Inc()
+	r.workerDuration.WithLabelValues(result).Observe(duration.Seconds())
+}
+
+func (r *Reporter) ReportWorkerRetry() {
+	r.workerRetries.Inc()
+}
+
+func (r *Reporter) ReportWorkerLeaseLost() {
+	r.workerLeaseLost.Inc()
+}
+
+func (r *Reporter) ReportWorkerRedelivery() {
+	r.workerRedeliveries.Inc()
+}
+
+func (r *Reporter) SetWorkerPending(count int64) {
+	r.workerPending.Set(float64(count))
+}
+
+func (r *Reporter) ReportRecoveryAction(action string, count int) {
+	r.recoveryActions.WithLabelValues(action).Add(float64(count))
+}
+
+func (r *Reporter) ReportRecoveryFailure() {
+	r.recoveryFailures.Inc()
+}
+
+func (r *Reporter) SetExecutionCount(status string, count int64) {
+	r.executions.WithLabelValues(status).Set(float64(count))
 }
 
 func (r *Reporter) GetHandler() http.Handler {

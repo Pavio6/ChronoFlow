@@ -2,7 +2,21 @@ global:
   scrape_interval: 10s
 
 scrape_configs:
-  - job_name: chronoflow
+  - job_name: chronoflow-compose
     metrics_path: /metrics
     static_configs:
-      - targets: ["host.docker.internal:8080"]
+      - targets:
+          - "chronoflow-api:8080"
+          - "chronoflow-scheduler:8081"
+          - "chronoflow-dispatcher:8082"
+          - "chronoflow-worker:8083"
+
+  # `make dev-*` 在宿主机启动各角色时使用这些地址。
+  - job_name: chronoflow-local
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "host.docker.internal:8080"
+          - "host.docker.internal:8081"
+          - "host.docker.internal:8082"
+          - "host.docker.internal:8083"

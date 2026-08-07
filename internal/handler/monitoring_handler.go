@@ -14,37 +14,29 @@ import (
 
 	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/model"
-	"github.com/chronoflow/internal/pkg/metrics"
-	redisqueue "github.com/chronoflow/internal/pkg/redis"
 	"github.com/chronoflow/internal/repository"
 	"github.com/gin-gonic/gin"
 )
 
 // MonitoringHandler 提供前端监控页使用的聚合数据
 type MonitoringHandler struct {
-	defRepo  repository.TimerDefinitionRepository
-	recRepo  repository.TimerRecordRepository
-	queue    *redisqueue.RedisQueue
-	reporter *metrics.Reporter
-	promURL  string
-	client   *http.Client
+	defRepo       repository.TimerDefinitionRepository
+	executionRepo repository.ExecutionQueryRepository
+	promURL       string
+	client        *http.Client
 }
 
 // NewMonitoringHandler 创建监控处理器
 func NewMonitoringHandler(
 	defRepo repository.TimerDefinitionRepository,
-	recRepo repository.TimerRecordRepository,
-	queue *redisqueue.RedisQueue,
-	reporter *metrics.Reporter,
+	executionRepo repository.ExecutionQueryRepository,
 	cfg *config.MonitoringConfig,
 ) *MonitoringHandler {
 	return &MonitoringHandler{
-		defRepo:  defRepo,
-		recRepo:  recRepo,
-		queue:    queue,
-		reporter: reporter,
-		promURL:  cfg.PrometheusURL,
-		client:   &http.Client{Timeout: 5 * time.Second},
+		defRepo:       defRepo,
+		executionRepo: executionRepo,
+		promURL:       cfg.PrometheusURL,
+		client:        &http.Client{Timeout: 5 * time.Second},
 	}
 }
 
@@ -57,24 +49,20 @@ func (h *MonitoringHandler) RegisterRoutes(r *gin.Engine) {
 
 // GetSummary 返回运行时监控摘要
 func (h *MonitoringHandler) GetSummary(c *gin.Context) {
-	ctx, cancel := context.WithTimeout(c.Request.Context(), 3*time.Second)
-	defer cancel()
-
 	timerStats, err := h.defRepo.CountByStatus()
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": err.Error()})
 		return
 	}
 
-	recordStats, err := h.recRepo.CountByStatus()
+	_, _, executionStats, err := h.executionRepo.ListExecutions(
+		&model.ExecutionListRequest{Page: 1, PageSize: 1},
+	)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": err.Error()})
-		return
-	}
-
-	queueStats, err := h.queue.Stats(ctx)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"code": http.StatusInternalServerError, "message": err.Error()})
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"code":    http.StatusInternalServerError,
+			"message": err.Error(),
+		})
 		return
 	}
 
@@ -87,15 +75,15 @@ func (h *MonitoringHandler) GetSummary(c *gin.Context) {
 				"inactive": timerStats[model.TimerStatusInactive],
 				"deleted":  timerStats[model.TimerStatusDeleted],
 			},
-			"records": gin.H{
-				"total":   sumRecordStats(recordStats),
-				"pending": recordStats[model.RecordStatusPending],
-				"running": recordStats[model.RecordStatusRunning],
-				"success": recordStats[model.RecordStatusSuccess],
-				"failed":  recordStats[model.RecordStatusFailed],
+			"executions": gin.H{
+				"total":      sumExecutionStats(executionStats),
+				"pending":    executionStats[model.ExecutionStatusPending],
+				"running":    executionStats[model.ExecutionStatusRunning],
+				"retry_wait": executionStats[model.ExecutionStatusRetryWait],
+				"success":    executionStats[model.ExecutionStatusSuccess],
+				"failed":     executionStats[model.ExecutionStatusFailed],
+				"cancelled":  executionStats[model.ExecutionStatusCancelled],
 			},
-			"redis":    queueStats,
-			"runtime":  h.reporter.Snapshot(),
 			"exporter": "/metrics",
 		},
 	})
@@ -117,9 +105,11 @@ type prometheusRangeResponse struct {
 }
 
 var historyQueries = map[string]string{
-	"success_rate":     `chronoflow_record_success_rate_percent`,
-	"callback_p95_ms":  `chronoflow_record_duration_p95_milliseconds`,
-	"abnormal_records": `chronoflow_pending_overdue_records + chronoflow_running_stale_records`,
+	"success_rate": `100 * sum(chronoflow_executions{status="SUCCESS"}) / ` +
+		`clamp_min(sum(chronoflow_executions{status=~"SUCCESS|FAILED"}), 1)`,
+	"callback_p95_ms": `1000 * histogram_quantile(0.95, ` +
+		`sum by (le) (rate(chronoflow_worker_execution_duration_seconds_bucket[5m])))`,
+	"abnormal_executions": `sum(chronoflow_executions{status=~"PENDING|RUNNING|RETRY_WAIT"})`,
 }
 
 // GetHistory returns a fixed set of historical series stored by Prometheus.
@@ -248,7 +238,7 @@ func sumTimerStats(stats map[model.TimerStatus]int64) int64 {
 	return total
 }
 
-func sumRecordStats(stats map[model.RecordStatus]int64) int64 {
+func sumExecutionStats(stats map[model.ExecutionStatus]int64) int64 {
 	var total int64
 	for _, count := range stats {
 		total += count

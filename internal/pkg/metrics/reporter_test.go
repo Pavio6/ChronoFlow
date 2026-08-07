@@ -10,13 +10,11 @@ import (
 
 func TestReporterExportsMVPMetricsWithoutHighCardinalityLabels(t *testing.T) {
 	reporter := NewReporter()
-	reporter.ReportCallback(ResultSuccess, 250*time.Millisecond)
-	reporter.SetRecordCount("PENDING", 2)
-	reporter.SetPendingOverdueRecords(1)
-	reporter.SetRunningStaleRecords(3)
-	reporter.SetRedisQueueItems(4)
-	reporter.SetRecordSuccessRate(94.5)
-	reporter.SetRecordDurationP95Milliseconds(315)
+	reporter.ReportSchedulerBatch(1, 1, 0, 50*time.Millisecond, true)
+	reporter.ReportOutboxPublish(true)
+	reporter.ReportWorkerExecution(ResultSuccess, 100*time.Millisecond)
+	reporter.ReportWorkerRetry()
+	reporter.ReportRecoveryAction("reenqueue", 1)
 
 	families, err := prometheus.DefaultGatherer.Gather()
 	if err != nil {
@@ -28,32 +26,34 @@ func TestReporterExportsMVPMetricsWithoutHighCardinalityLabels(t *testing.T) {
 		byName[family.GetName()] = family
 	}
 	for _, name := range []string{
-		CallbackRequestsTotal,
-		CallbackDurationSeconds,
-		Records,
-		PendingOverdueRecords,
-		RunningStaleRecords,
-		RedisQueueItems,
-		RecordSuccessRate,
-		RecordDurationP95Ms,
+		SchedulerBatchesTotal,
+		SchedulerExecutions,
+		OutboxPublishTotal,
+		WorkerExecutionsTotal,
+		WorkerDurationSeconds,
+		WorkerRetriesTotal,
+		RecoveryActionsTotal,
+		Executions,
 	} {
 		if byName[name] == nil {
 			t.Errorf("metric %q was not exported", name)
 		}
 	}
-	for _, oldName := range []string{
+	for _, obsoleteName := range []string{
 		"chronoflow_timer_exec_total",
 		"chronoflow_timer_exec_duration_ms",
 		"chronoflow_timer_queue_size",
+		"chronoflow_records",
+		"chronoflow_callback_requests_total",
+		"chronoflow_redis_queue_items",
 	} {
-		if byName[oldName] != nil {
-			t.Errorf("legacy metric %q is still exported", oldName)
+		if byName[obsoleteName] != nil {
+			t.Errorf("obsolete metric %q is still exported", obsoleteName)
 		}
 	}
 
-	assertOnlyLabel(t, byName[CallbackRequestsTotal], LabelResult)
-	assertOnlyLabel(t, byName[CallbackDurationSeconds], LabelResult)
-	assertOnlyLabel(t, byName[Records], LabelStatus)
+	assertOnlyLabel(t, byName[WorkerExecutionsTotal], LabelResult)
+	assertOnlyLabel(t, byName[Executions], LabelStatus)
 }
 
 func assertOnlyLabel(t *testing.T, family *dto.MetricFamily, label string) {
