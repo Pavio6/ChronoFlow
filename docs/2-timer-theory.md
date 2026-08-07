@@ -1,185 +1,74 @@
-# 分布式定时器原理与实现
+# 定时任务的核心语义
 
-## 背景
+## 1. Timer 不是待执行任务列表
 
-ChronoFlow 采用主动轮询 + 二维分片的架构设计，解决大规模定时任务调度的核心问题。
+Timer 是一条规则，Execution 才是某个具体计划时间的执行实例。
 
-## 核心问题
-
-传统定时任务调度面临三个核心问题：
-
-1. **全量扫描效率低**：每次触发都要扫描所有任务，O(N) 复杂度
-2. **单点瓶颈**：单个 Redis ZSet 存储所有任务，成为性能瓶颈
-3. **重复执行**：多实例部署时，同一任务可能被多个实例执行
-
-## 解决方案
-
-### 1. 主动轮询 + 有序表（时间 O(N) → O(logN)，空间 O(N) → O(N)）
-
-**传统方案**：定时扫描数据库，查询所有到期任务
-```
-SELECT * FROM tasks WHERE next_trigger_time <= NOW()
-```
-问题：任务量大时，全表扫描效率极低。
-
-**优化方案**：用 Redis ZSet（score = 执行时间戳）替代全盘扫描
-```
-ZRANGEBYSCORE chronoflow:timer:{range}:{bucket} -inf now LIMIT 0 100
-```
-优势：ZSet 底层使用 skiplist（跳表）按 score 排序，`ZRANGEBYSCORE` 通过跳表实现 O(logN + M) 的范围查询（M 为返回元素数），远优于全表扫描的 O(N)。
-
-**空间复杂度对比**：
-
-| 方案 | 时间复杂度 | 空间复杂度 | 说明 |
-|------|-----------|-----------|------|
-| MySQL 全表扫描 | O(N) | O(N) | 每行存储完整字段（timer_id、cron_expr、callback_url 等），单行约几百字节 |
-| Redis ZSet | O(logN + M) | O(N) | 每个元素仅存 member（`timer_id:trigger_time_ms`）+ score（8 字节），单条约 30~50 字节 |
-
-两者空间复杂度同为 O(N)，但 Redis ZSet 单元素开销远小于 MySQL 行记录；配合时间分片 + 分桶，每个 ZSet 实际元素量极小（N 被分摊到多个 key），进一步降低单次查询的内存占用和跳表遍历深度。
-
-### 2. 纵向分治（时间分片）
-
-**问题**：单个 ZSet 存储所有任务，key 越大查询越慢。
-
-**方案**：按分钟级时间范围切分 ZSet，每个分片独立 key。
-
-```
-# 不同时间片的 key
-chronoflow:timer:2026-05-22-10:00:0   # 10:00 第 0 桶
-chronoflow:timer:2026-05-22-10:01:0   # 10:01 第 0 桶
-chronoflow:timer:2026-05-22-10:02:0   # 10:02 第 0 桶
+```text
+Timer:      每分钟第 0 秒执行
+Execution:  10:00:00、10:01:00、10:02:00 各自独立
 ```
 
-**复杂度变化**（设总任务数 N，时间分片数 T）：
+ChronoFlow 不提前生成未来窗口，也不创建时间桶。每个 ACTIVE Timer 只保存一个权威游标 `next_fire_at`。Scheduler 发现游标到期后，生成当前 Execution 并把游标推进到下一次。
 
-| 维度 | 分片前 | 分片后 |
-|------|--------|--------|
-| 单次查询时间 | O(logN + M) | O(log(N/T) + M) |
-| 单 key 空间 | O(N) | O(N/T) |
-| 总空间 | O(N) | O(N) |
+这种模型的状态规模与 Timer 数量相关，而不是与“未来触发点数量”相关。
 
-将 N 个任务分散到 T 个时间片中，每个 ZSet 的元素量从 N 降为 N/T，跳表层数减少，查询更快；过期分片可直接 DEL 释放内存。
+## 2. 时间与 Cron
 
-### 3. 横向分治（分桶并发）
+- Cron 使用六字段格式：`秒 分 时 日 月 周`。
+- `timezone` 决定 Cron 的日历语义。
+- MySQL 中 `next_fire_at` 和 `scheduled_at` 统一保存 UTC。
+- 激活 Timer 时从当前时间计算第一个 `next_fire_at`。
+- 停用或删除 Timer 时清空 `next_fire_at`。
 
-**问题**：单个时间片内任务量大，单 goroutine 处理慢。
+时区转换只发生在 Cron 计算边界；持久化和跨进程传输统一使用 UTC。
 
-**方案**：按 `timer_id % bucket_num` 分桶，每桶独立 goroutine 并发处理。
+## 3. Misfire
 
-```
-# 同一时间片的不同桶
-chronoflow:timer:2026-05-22-10:00:0   # 桶 0
-chronoflow:timer:2026-05-22-10:00:1   # 桶 1
-chronoflow:timer:2026-05-22-10:00:2   # 桶 2
-```
+进程停止、数据库故障或发布会让 Scheduler 晚于计划时间看到 Timer。`misfire_policy` 决定如何处理错过的触发点：
 
-**复杂度变化**（设总任务数 N，分桶数 B）：
+| 策略 | 行为 |
+| --- | --- |
+| `SKIP` | 不补执行错过的触发点，游标推进到现在之后 |
+| `FIRE_ONCE` | 为最早错过点创建一次 Execution，然后推进到现在之后 |
+| `CATCH_UP` | 按顺序补创建，单轮最多 `max_catch_up` 条 |
 
-| 维度 | 分桶前 | 分桶后 |
-|------|--------|--------|
-| 单次查询时间 | O(logN + M) | O(log(N/B) + M) |
-| 单 key 空间 | O(N) | O(N/B) |
-| 总空间 | O(N) | O(N) |
-| 并发度 | 1 goroutine | B goroutine |
+`scheduler.misfire_grace_seconds` 提供允许的调度延迟窗口。`CATCH_UP` 必须有限制，避免长时间停机后一次事务生成无界数据。
 
-将同一个时间片的任务分散到 B 个桶中，每个桶的元素量从 N 降为 N/B；B 个 goroutine 并行处理，吞吐量提升 B 倍。
+## 4. 三种不同的“重复”
 
-### 4. 二维分片
+### 重复生成
 
-将纵向分治和横向分治组合，得到二维分片：
+多个 Scheduler 可能同时观察到同一 Timer。行锁降低竞争，数据库唯一键 `(timer_id, scheduled_at)` 提供最终防线。
 
-```
-key = {time_range}:{bucket}
-```
+### 重复投递
 
-- **第一维（时间）**：按分钟切分，减少单次查询量
-- **第二维（桶）**：按 timer_id 分桶，实现并发处理
+Dispatcher 可能在 XADD 成功后、回写 MySQL 前崩溃。恢复后同一事件可能再次进入 Stream，这是 Outbox 至少一次模型的预期行为。
 
-## ChronoFlow 的实现
+### 重复执行
 
-### Migrator（一级迁移：MySQL → Redis）
+Worker 必须先取得 Execution Lease。只有携带当前 `run_token` 的执行者才能提交结果。因此重复消息通常只会被确认，不会再次调用回调。
 
-```go
-// 核心逻辑
-for _, def := range activeDefinitions {
-    triggerTimes := cronParser.NextTriggerTimesBefore(def.CronExpr, startTime, endTime)
-    for _, triggerTime := range triggerTimes {
-        if triggerTime.After(endTime) { break }
-        
-        // 幂等检查
-        if exists, _ := repo.ExistsByTimerIDAndTriggerTime(def.ID, triggerTime); exists {
-            continue
-        }
-        
-        // 创建记录
-        record := &TimerRecord{TimerID: def.ID, TriggerTime: triggerTime, Status: "PENDING"}
-        repo.Create(record)
-        
-        // 推入 Redis
-        bucket := def.ID % bucketNum
-        timeRange := formatTimeRange(triggerTime)
-        queue.PushTask(ctx, timeRange, bucket, &TaskTrigger{TimerID: def.ID, TriggerTime: triggerTime})
-    }
-}
-```
+仍然存在一种不可完全消除的窗口：外部服务已经处理回调，但 Worker 在保存成功状态前崩溃。没有跨 HTTP 服务的分布式事务时，调度系统无法判断外部副作用是否发生。因此回调方应按 Execution ID 实现幂等。
 
-### Scheduler → Trigger → Executor 双协程池通信
+## 5. ants 与 Redis Streams
 
-```go
-// Scheduler：提交 worker；worker 内抢锁并运行 Trigger（同时处理当前分钟和上一分钟）
-currentBucketNum, _ := queue.GetBucketNum(ctx, currentTimeRange, defaultBucketNum)
-prevBucketNum, _ := queue.GetBucketNum(ctx, prevTimeRange, defaultBucketNum)
-lockExpiration := time.Duration(cfg.LockExpiration) * time.Second // 默认 70s
+两者解决不同层次的问题：
 
-for bucket := 0; bucket < currentBucketNum; bucket++ {
-    schedulerPool.Submit(func() {
-        lock := queue.NewSchedulerLock(currentTimeRange, bucket) // token = processID_goroutineID
-        if acquired, _ := lock.Lock(ctx, lockExpiration); acquired {
-            trigger.Run(ctx, currentTimeRange, bucket, currentBucketNum, lock)
-        }
-    })
-}
-for bucket := 0; bucket < prevBucketNum; bucket++ {
-    schedulerPool.Submit(func() {
-        lock := queue.NewSchedulerLock(prevTimeRange, bucket)
-        if acquired, _ := lock.Lock(ctx, lockExpiration); acquired {
-            trigger.Run(ctx, prevTimeRange, bucket, prevBucketNum, lock)
-        }
-    })
-}
+- Redis Streams 是跨进程的持久化消息通道，支持 Consumer Group、Pending 和故障接管。
+- ants 是单个 Worker 进程内的 Goroutine 并发限制器，控制连接数、内存和下游压力。
 
-// Trigger：非重叠窗口轮询 + DB 部分投递补偿 + 提交 Executor + 成功保留锁
-successExpiration := time.Duration(cfg.SuccessExpiration) * time.Second // 默认 130s
-cursor := sliceStart
-for cursor.Before(sliceEnd) {
-    dueEnd := min(nextWholeSecond(time.Now()), sliceEnd)
-    if !cursor.Before(dueEnd) { continue }
-    triggers, _ := queue.GetTasksByTime(ctx, timeRange, bucket, cursor, dueEnd)
-    // 每个窗口始终合并已有 MySQL PENDING 记录（Redis 部分失败兜底）
-    dbTriggers, _ := recRepo.GetPendingByTimeRange(cursor, dueEnd)
-    // 过滤 DB 结果: timer_id % bucketNum == bucket
-    triggers = mergeTaskTriggers(triggers, filterBucket(dbTriggers, bucket, bucketNum))
-    for _, t := range triggers {
-        triggerPool.Submit(func() {
-            executor.Execute(ctx, t)
-        })
-    }
-    cursor = dueEnd
-}
-lock.Extend(ctx, successExpiration) // Lua 校验 token 后设置完整扫描成功后的保留 TTL
-```
+ants 不能代替消息队列：进程退出后，内存中的任务不会由其他机器接管。Redis Streams 也不能代替本地限流：一个 Worker 仍需要限制同时执行的回调数。
 
-`schedulerPool` 仅负责分片扫描与 Trigger 运行，`triggerPool` 承载 Executor HTTP 回调；Executor 使用固定 `12s` HTTP 超时限制异常下游占用执行 worker 的时间。
+## 6. 可靠性的权威来源
 
-### 数据库原子执行抢占
+| 信息 | 权威来源 |
+| --- | --- |
+| Timer 是否应继续调度 | MySQL `timer_definitions` |
+| 某计划时间是否已生成 | MySQL Execution 唯一键 |
+| 执行状态和当前所有者 | MySQL `timer_executions` |
+| 是否需要发布消息 | MySQL `outbox_events` |
+| 哪些消息待某 Consumer 确认 | Redis Consumer Group |
+| 单进程当前可运行多少回调 | ants Pool |
 
-```
-唯一索引 (timer_id, trigger_time) → 防止重复创建执行记录
-UPDATE ... WHERE status = PENDING → RowsAffected = 1 → 获得执行权
-                                  → RowsAffected = 0 → 跳过重复派发
-```
-
-| 层级 | 作用 | 正确性职责 |
-|------|------|------------|
-| 唯一索引 | 阻止重复建任务记录 | 必须 |
-| 条件状态更新 | 竞争执行权 | 必须 |
+设计判断的简单原则是：Redis 消息可以重建，MySQL 权威状态不能依赖 Redis 才成立。

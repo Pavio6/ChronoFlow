@@ -1,96 +1,79 @@
-# 分布式锁与幂等
+# 并发控制、Lease 与分布式锁
 
-## 分片锁
+ChronoFlow 不使用一个覆盖全系统的“分布式锁”。不同阶段使用与其权威数据位于同一系统内的并发原语。
 
-ChronoFlow 以 `{time_range}:{bucket}` 为锁粒度。锁保护的是一分钟分片的扫描和派发，不是 HTTP 回调的完整执行周期。
+## 1. 单体锁和分布式锁
 
-```text
-chronoflow:scheduler_lock:{YYYY-MM-DD-HH:mm}:{bucket}
-```
+进程内锁（`sync.Mutex`）只协调同一进程的 Goroutine。部署两个实例后，每个实例都有自己的锁，彼此不可见。
 
-### 获取与所有权
+分布式锁让多台机器争夺一个逻辑所有权，常见实现位于 Redis、ZooKeeper、etcd 或数据库。但“拿到锁”不等于业务安全：锁可能过期，旧持有者可能继续运行，因此关键写入仍需要条件更新、唯一约束或 fencing token。
 
-Scheduler 先将分片处理提交到独立的 `schedulerPool`；处理该分片的 worker 创建锁对象，并使用 `GetProcessAndGoroutineIDStr()` 生成 token：
+## 2. ChronoFlow 的并发控制矩阵
 
-```go
-lock := queue.NewSchedulerLock(timeRange, bucket) // token = processID_goroutineID
-acquired, err := lock.Lock(ctx, 70*time.Second)
-if acquired {
-    trigger.Run(ctx, timeRange, bucket, bucketNum, lock)
-}
-```
+| 阶段 | 并发原语 | 权威系统 | 最终防线 |
+| --- | --- | --- | --- |
+| Scheduler 领取 Timer | 行锁 + `SKIP LOCKED` | MySQL | Execution 唯一键、Timer `version` |
+| Dispatcher 领取 Outbox | 有期限的 Claim | MySQL | 唯一 `event_id`、Worker 幂等抢占 |
+| Worker 分配消息 | Consumer Group / Pending | Redis | MySQL Execution Lease |
+| Worker 提交结果 | Lease + `run_token` | MySQL | 条件更新 |
+| 单 Worker 并发 | ants Pool | 进程内 | `pool_size` 容量 |
 
-锁 value 为 token。Trigger 完整扫描分片后调用 `lock.Extend`；该操作通过 Lua 先校验 Redis 中的 token 是否仍属于当前 worker，再执行 `EXPIRE`。`lock.Release` 同样通过 Lua 校验后删除。
+## 3. 数据库行锁
 
-```lua
-if redis.call("GET", KEYS[1]) == ARGV[1] then
-    return redis.call("EXPIRE", KEYS[1], ARGV[2])
-end
-return 0
-```
-
-如果旧 Trigger 的租约已经过期，而同名分片锁已被另一个 worker 重新取得，旧 Trigger 无法续期或释放新锁。任务执行幂等仍不依赖该锁，由 MySQL 原子状态抢占保证。
-
-### `70s` 与 `130s`
-
-```text
-Scheduler 取得分片锁，初始 TTL = 70s
-    |
-    v
-Trigger 以不重叠窗口扫描完整分钟分片，并向 triggerPool 提交 Executor
-    |
-    v
-扫描无错误完成后，Lua 校验 token，将 TTL 重置为 130s
-    |
-    v
-锁自然过期；期间抑制 Scheduler 对当前/上一分钟分片重入
-```
-
-- `lock_expiration = 70s`：覆盖 60 秒分片处理，并保留调度余量。
-- `success_expiration = 130s`：分片派发成功后的保留租约，覆盖上一分钟回扫窗口。
-- `130s` 不表示任务执行期间一直持锁；Executor 的 HTTP 回调由独立 `triggerPool` 异步执行。
-- `triggerPool` 中的 HTTP 回调固定超时为 `12s`，不会无限期占用回调执行 worker。
-
-## 派发防重
-
-Redis ZSet 中的任务在读取后仍然保留，以便进程异常后能够补扫。Trigger 不再重复读取 `score <= now` 的累计范围，而是推进扫描游标：
-
-```text
-[10:05:00, 10:05:01)
-[10:05:01, 10:05:02)
-...
-[10:05:59, 10:06:00)
-```
-
-同一次 Trigger 运行中，每个触发时间只落入一个窗口。对于已经过去但需要恢复的上一分钟分片，Trigger 会直接扫描完整历史区间。
-
-窗口扫描降低重复派发，但不是最终执行幂等屏障：锁失效或节点故障后仍允许重新派发尚未完成的任务。
-
-## 执行幂等
-
-### 创建唯一性
-
-`timer_records` 具有业务唯一键：
+Scheduler 的行锁只在短事务中持有。多个副本执行相同查询时：
 
 ```sql
-UNIQUE KEY uk_timer_trigger_time (timer_id, trigger_time)
+SELECT ...
+FROM timer_definitions
+WHERE status='ACTIVE' AND next_fire_at<=?
+ORDER BY next_fire_at, id
+LIMIT ?
+FOR UPDATE SKIP LOCKED;
 ```
 
-Migrator 与激活流程的存在性检查会识别任意状态的既有记录，数据库唯一约束负责处理并发竞争下的最终一致性。开发阶段该唯一键直接定义在 `migrations/001_init.sql` 中。
+副本 A 锁定的行，副本 B 会跳过并处理其他行。事务提交或回滚后锁自动释放。
 
-### 回调执行权
+这不是“单体锁”：锁状态由共享 MySQL 维护，所有机器都能看到。
 
-Executor 在调用外部 HTTP 回调前执行条件更新：
+## 4. Lease 为什么不是普通锁
+
+Dispatcher 和 Worker 的工作会跨越一个较长过程，不适合始终持有数据库事务。因此使用有过期时间的 Lease：
+
+```text
+claim_owner / claim_until     Outbox 发布所有权
+lease_owner / lease_until     Execution 执行所有权
+```
+
+Worker 在回调期间续租。进程崩溃后不会主动释放，但其他实例可在 `lease_until` 到期后接管。
+
+Lease 有一个固有问题：旧执行者可能在网络暂停后恢复。`run_token` 用作 fencing token：
 
 ```sql
-UPDATE timer_records
-SET status = 'RUNNING', started_at = ?
-WHERE timer_id = ? AND trigger_time = ? AND status = 'PENDING';
+UPDATE timer_executions
+SET status='SUCCESS', ...
+WHERE id=? AND status='RUNNING' AND run_token=?;
 ```
 
-- `RowsAffected = 1`：当前 Executor 获得执行权，可以发起回调。
-- `RowsAffected = 0`：任务已被其他 Executor 领取或已完成，直接跳过。
+新执行者接管时会生成新 token，旧执行者即使回来也无法覆盖新状态。
 
-因此，即使一个 ZSet member 因故障恢复而被重复派发，也只有一个 Executor 能从数据库获得执行许可。
+## 5. Lua 能解决什么
 
-获得执行权后，Executor 使用固定 `12s` 超时发送 HTTP 回调。下游超过该时限仍未完成时，记录会更新为 `FAILED`；该超时不改变分片锁的扫描和续期语义。
+Redis Lua 可以把多条 Redis 命令原子化，例如“值匹配才释放锁”。它不能让 MySQL 写入和 Redis 写入成为同一个原子事务：
+
+```text
+MySQL COMMIT 成功
+进程崩溃
+Redis Lua 尚未执行
+```
+
+因此 MySQL → Redis 的可靠投递使用 Transactional Outbox，而不是 Lua 双写。Lua 适用于 Redis 内部原子操作，不适用于跨 MySQL 和 Redis 的事务。
+
+## 6. 需要接受的语义
+
+系统保证任务状态可恢复，并尽量避免重复回调，但 HTTP 副作用无法与 MySQL 状态提交组成原子事务。调用方应：
+
+- 接收稳定的 Execution ID 作为幂等键；
+- 重复请求返回已有结果；
+- 不把 Worker IP 或 Consumer 名称当作业务身份。
+
+这是分布式任务系统的正常边界，不应通过延长锁时间来掩盖。

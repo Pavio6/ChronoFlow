@@ -1,315 +1,134 @@
-# E2E 流程详解
+# 端到端执行流程
 
-本文档描述从创建定时器到任务执行完成的完整流程，包括数据流和状态变化。
+本文按一次 Timer 从创建到回调完成说明真实数据流。
 
-## 流程概览
+## 1. 创建与激活
 
-```
-用户创建定时器 → 激活 → Migrator 预创建任务 → Redis 入队
-     ↓
-Scheduler 轮询 → `[schedulerPool]` 抢锁/Trigger 扫描 → `[triggerPool]` Executor 执行 → `[12s timeout]` HTTP 回调
-     ↓
-执行完成 → 更新记录 → 设置幂等标记
-```
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant A as API
+    participant DB as MySQL
 
-## 1. 创建定时器
-
-定时器定义一经创建不可修改。系统仅允许后续激活、停用或删除；需要调整 Cron 或回调参数时，删除旧定义并重新创建。
-
-### 数据流
-
-```
-HTTP API (POST /timers)
-    ↓
-Handler.CreateTimer()
-    ↓
-TimerService.Create()
-    ↓
-MySQL INSERT → timer_definitions 表
+    U->>A: POST /timers
+    A->>A: 校验 Cron、时区、回调 URL、misfire
+    A->>DB: INSERT Timer(INACTIVE)
+    U->>A: POST /timers/:id/activate
+    A->>A: cron.Next(now)
+    A->>DB: 条件更新 ACTIVE + next_fire_at
 ```
 
-### 状态变化
+创建和激活分离，避免一条尚未确认的配置立即开始执行。
 
-```
-新创建 → INACTIVE（默认状态）
-```
+## 2. 生成 Execution
 
-### 代码示例
+Scheduler 轮询到 `next_fire_at <= now` 的 Timer 后开启事务：
 
-```go
-// timer_service.go
-func (s *TimerService) Create(req *model.CreateTimerDefinitionRequest) (*model.TimerDefinition, error) {
-    // 验证 Cron 表达式
-    if err := s.parser.ValidateCronExpr(req.CronExpr); err != nil {
-        return nil, err
-    }
-    
-    def := &model.TimerDefinition{
-        Status: model.TimerStatusInactive,  // 默认未激活
-        // ...
-    }
-    s.defRepo.Create(def)
-    return def, nil
-}
+```text
+锁定到期 Timer
+  → 计算触发点与下一游标
+  → INSERT timer_executions
+  → INSERT outbox_events
+  → UPDATE timer_definitions.next_fire_at
+  → COMMIT
 ```
 
-## 2. 激活定时器
+Execution 保存当时的回调配置快照。因此 Timer 后续状态变化不会改变已经生成的执行内容。
 
-### 数据流
+如果 Scheduler 在提交前崩溃，所有写入回滚；如果提交后崩溃，Outbox 已持久化，Dispatcher 会继续处理。
 
-```
-HTTP API (POST /timers/:id/activate)
-    ↓
-Handler.ActivateTimer()
-    ↓
-TimerService.Activate()
-    ↓
-状态机验证
-    ↓
-MySQL UPDATE status = 'ACTIVE'
-    ↓
-计算时间窗口：now ~ now + migrate_step_minutes*2
-    ↓
-解析 Cron 表达式，计算触发时间点
-    ↓
-幂等检查 + 创建 MySQL 记录（status = PENDING）
-    ↓
-按 {time_range}:{bucket} 分组，批量推送到 Redis
+## 3. Outbox 投递
+
+```mermaid
+sequenceDiagram
+    participant D as Dispatcher
+    participant DB as MySQL
+    participant R as Redis Stream
+
+    D->>DB: Claim unpublished Outbox
+    DB-->>D: events + claim_until
+    D->>R: XADD execution event
+    R-->>D: message_id
+    D->>DB: MarkPublished(event_id, message_id)
 ```
 
-### 状态变化
+XADD 失败时事件留在 MySQL 并退避重试。XADD 成功但 MarkPublished 失败时，未来可能再次发布同一事件；这是至少一次投递。
 
-```
-INACTIVE → ACTIVE（激活）
-```
+## 4. Worker 领取与执行
 
-### 状态机规则
+```mermaid
+sequenceDiagram
+    participant R as Redis
+    participant W as Worker
+    participant DB as MySQL
+    participant P as ants Pool
+    participant C as Callback
 
-```go
-// state_machine.go
-var timerTransitions = map[TimerStatus][]TimerStatus{
-    TimerStatusActive:   {TimerStatusInactive, TimerStatusDeleted},
-    TimerStatusInactive: {TimerStatusActive, TimerStatusDeleted},
-    TimerStatusDeleted:  {},  // 终态
-}
-```
-
-## 3. Migrator 预创建任务
-
-### 触发时机
-
-- 等待第一次 ticker 触发（启动时不立即执行）
-- 之后每隔 `migrate_step_minutes`（默认 60 分钟）执行一次
-
-### 数据流
-
-```
-Migrator.doMigrate()
-    ↓
-查询 MySQL: SELECT * FROM timer_definitions WHERE status = 'ACTIVE'
-    ↓
-解析 Cron 表达式，计算触发时间点
-时间范围：GetStartHour(now + step) ~ GetStartHour(now + 2*step)（小时级取整）
-    ↓
-幂等检查: SELECT EXISTS(timer_id + trigger_time)，并由唯一键兜底并发插入
-    ↓
-MySQL INSERT → timer_records 表（status = PENDING）
-    ↓
-按 {time_range}:{bucket} 分组
-    ↓
-Redis ZADD → ZSet（score = trigger_time_unix）
+    W->>R: XREADGROUP
+    W->>DB: Claim Execution Lease
+    alt 已是终态或被其他实例持有
+        W->>R: XACK
+    else 抢占成功
+        W->>P: Submit
+        P->>C: HTTP callback
+        W->>DB: Complete WHERE run_token=?
+        W->>R: XACK
+    end
 ```
 
-### 状态变化
+ants 只限制当前 Worker 的并发数。Redis Consumer Group 在多个 Worker 之间分配消息。MySQL Lease 决定哪个实例有权执行和提交结果。
 
-```
-记录创建 → PENDING（等待执行）
-```
+## 5. 结果与重试
 
-### 分桶规则
+成功的 HTTP 2xx：
 
-```go
-bucket := timer_id % bucket_num
-timeRange := triggerTime.Format("2006-01-02-15:04")
-key := fmt.Sprintf("%s:%d", timeRange, bucket)
+```text
+RUNNING → SUCCESS → XACK
 ```
 
-### Redis 数据结构
+可重试错误包括网络错误、超时、`408`、`425`、`429` 和 `5xx`：
 
-```
-ZSet Key: chronoflow:timer:2026-05-22-10:30:0
-Member: {timer_id}:{trigger_time_ms}
-Score: trigger_time_unix
-```
-
-## 4. Scheduler 轮询调度
-
-### 触发时机
-
-每隔 `scan_interval`（默认 1 秒）执行一次
-
-### 数据流
-
-```
-Scheduler.Run()
-    ↓
-计算当前 time_range = YYYY-MM-DD-HH:mm
-    ↓
-同时处理当前分钟和上一分钟，避免边界遗漏
-    ↓
-分别获取各分钟的动态分桶数（可能不同）
-    ↓
-遍历桶号 0 ~ bucketNum-1，提交分片处理 worker
-    ↓
-worker 创建 token = processID_goroutineID
-    ↓
-SET NX 抢锁（value = token，TTL = lock_expiration，默认 70s）
-    ↓
-抢到锁 → 同一 worker 运行 Trigger
+```text
+RUNNING
+  → RETRY_WAIT
+  → 在同一 MySQL 事务写重试 Outbox
+  → available_at 到期后再次进入 Stream
+  → RUNNING
 ```
 
-### 分布式锁
+确定性 `4xx` 直接进入 `FAILED`。达到 `max_attempts` 后不再重试。
 
-```go
-lock := queue.NewSchedulerLock(timeRange, bucket) // token = GetProcessAndGoroutineIDStr()
-acquired := lock.Lock(ctx, lockExpiration)
-```
+## 6. 崩溃恢复
 
-## 5. Trigger 读取任务
+### Worker 在回调前崩溃
 
-### 数据流
+消息留在 Redis Pending，Execution Lease 到期。其他 Worker 使用 `XAUTOCLAIM` 接管。
 
-```
-Trigger.Run()
-    ↓
-计算时间片区间 `[minuteStart, minuteStart + 1min)`
-    ↓
-循环推进 cursor:
-    GetTasksByTime(time_range, bucket, cursor, dueEnd)
-    ↓
-    ZRANGEBYSCORE 获取 `[cursor, dueEnd)` 的任务（只读不删，窗口不重叠）
-    ↓
-    合并已有 MySQL PENDING 记录（Redis 部分失败兜底）
-    ↓
-    提交 Executor 到 triggerPool，并推进 cursor
-    ↓
-完整扫描成功后，Lua 校验 token 并将锁 TTL 设为 success_expiration（默认 130s）
-```
+### Worker 在回调后、保存结果前崩溃
 
-### 代码示例
+系统会重试，外部回调可能收到重复请求。调用方必须按 Execution ID 幂等。
 
-```go
-// trigger.go
-func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketNum int, lock *redis.SchedulerLock) {
-    timeSliceStart, timeSliceEnd := parseMinuteRange(timeRange)
-    cursor := timeSliceStart
-    successExpiration := time.Duration(t.cfg.SuccessExpiration) * time.Second
+### Redis 丢失消息
 
-    for cursor.Before(timeSliceEnd) {
-        dueEnd := min(nextWholeSecond(time.Now()), timeSliceEnd)
-        if !cursor.Before(dueEnd) { continue }
+Reconciler 扫描长时间处于 `PENDING` 且没有新投递记录的 Execution，写入恢复 Outbox。
 
-        triggers, _ := t.queue.GetTasksByTime(ctx, timeRange, bucket, cursor, dueEnd)
-        
-        // 合并已有 MySQL PENDING 记录，覆盖 Redis 部分写入失败
-        dbTriggers, _ := t.getDueTasksFromDB(ctx, timeRange, bucket, bucketNum, cursor, dueEnd)
-        triggers = mergeTaskTriggers(triggers, dbTriggers)
-        
-        for _, trigger := range triggers {
-            t.triggerPool.Submit(func() {
-                t.executor.Execute(ctx, trigger)
-            })
-        }
-        cursor = dueEnd
-    }
-    lock.Extend(ctx, successExpiration)
-}
-```
+### RUNNING Lease 过期
 
-## 6. Executor 执行任务
+Reconciler 将其恢复到可执行状态或在尝试耗尽后标记失败。旧 Worker 的 `run_token` 已失效，不能提交过期结果。
 
-### 数据流
+### Redis 停机
 
-```
-Executor.Execute(trigger)
-    ↓
-查询包含状态的定时器定义（内存缓存 → MySQL）
-    ↓
-按定义状态判断；非 ACTIVE 则跳过
-    ↓
-原子抢占状态: PENDING → RUNNING
-    ↓ 更新行数为 0：跳过
-获得执行权
-    ↓
-使用固定 12s 超时执行 HTTP 回调
-    ↓
-更新状态: RUNNING → SUCCESS/FAILED
-```
+Scheduler 和 API 继续使用 MySQL。Outbox 增长；Redis 恢复后 Dispatcher 补投。Dispatcher/Worker 的 `/ready` 在故障期间返回非就绪。
 
-停用或删除定时器不会删除 Redis ZSet 中已经打下的点。点仍可被 Trigger 读取并提交；Executor 按本地定义缓存中的状态判断是否执行，因此持有旧 `ACTIVE` 缓存的节点可能在一个 `step2_duration` 周期内继续发起回调，缓存过期回源 MySQL 后才跳过。
+## 7. 一次执行的可观测轨迹
 
-### 存储唯一性与原子抢占
+排障时按以下顺序检查：
 
-```
-建记录: UNIQUE(timer_id, trigger_time)
-    ↓ 防止 Migrator/Activate 并发创建重复记录
-执行前: UPDATE ... WHERE status = 'PENDING'
-    ↓ RowsAffected = 1
-    执行任务
-    ↓ RowsAffected = 0
-    跳过重复派发
-```
+1. `timer_definitions.next_fire_at` 是否推进；
+2. 对应 `(timer_id, scheduled_at)` 的 Execution 是否存在；
+3. Outbox 是否已发布、是否有错误和下一重试时间；
+4. Redis Consumer Group 是否有 Pending；
+5. Execution 的 `lease_owner`、`lease_until`、`attempt` 和状态；
+6. Worker 指标、回调状态码和截断后的错误信息。
 
-### 状态变化
-
-```
-PENDING → RUNNING → SUCCESS（执行成功）
-                  → FAILED（执行失败）
-```
-
-### 记录状态流转图
-
-```
-                    ┌─────────┐
-                    │ PENDING │
-                    └────┬────┘
-                         ↓
-                    ┌─────────┐
-                    │ RUNNING │
-                    └────┬────┘
-                         ↓
-        ┌────────────────┴────────────────┐
-        ↓                                 ↓
-   ┌─────────┐                      ┌─────────┐
-   │ SUCCESS │                      │ FAILED  │
-   └─────────┘                      └─────────┘
-```
-
-## 7. 完成后处理
-
-### 执行成功
-
-```go
-// 更新记录状态
-record.Status = model.RecordStatusSuccess
-record.ResponseCode = responseCode
-record.ResponseBody = responseBody
-recRepo.Update(record)
-
-```
-
-### 执行失败
-
-```go
-record.Status = model.RecordStatusFailed
-record.ErrorMessage = err.Error()
-```
-
-## 数据存储总结
-
-| 存储 | 数据内容 | 用途 |
-|------|----------|------|
-| MySQL timer_definitions | 定时器定义（Cron 表达式、回调地址等） | 定时器配置持久化 |
-| MySQL timer_records | 执行记录（触发时间、状态、结果等） | 执行历史 |
-| Redis ZSet | 待执行任务（score = 触发时间） | 高效任务调度 |
-| Redis Lock | 分布式锁（time_range + bucket，owner token） | 降低重复派发 |
+MySQL 中的 Execution ID 是整条链路最稳定的关联键。

@@ -1,288 +1,138 @@
-# 调度器模块详解
+# Scheduler 设计
 
-## 模块概览
+## 1. 输入与输出
 
-调度引擎由四个模块组成，其中执行主链路通过两个独立 ants 协程池隔离扫描和回调资源：
+Scheduler 的输入是 MySQL 中到期的 Timer：
 
-```
-Migrator
-
-Scheduler ──[schedulerPool]──→ Trigger ──[triggerPool]──→ Executor ──[12s timeout]──→ HTTP Callback
-```
-
-## Migrator 详解
-
-### 文件位置
-
-`internal/service/migrator.go`
-
-### 核心职责
-
-- 定时扫描 MySQL 中 ACTIVE 状态的定时器定义
-- 解析 Cron 表达式，计算未来 step1 时间范围内的触发时间点
-- 批量创建执行记录到 MySQL
-- 按分桶规则批量推送到 Redis ZSet
-
-### 执行时机
-
-```
-等待第一次 ticker 触发 → 每隔 migrate_step_minutes（默认 60 分钟）执行
+```sql
+status = 'ACTIVE'
+AND next_fire_at IS NOT NULL
+AND next_fire_at <= UTC_TIMESTAMP(3)
 ```
 
-启动时不立即执行，等待首次 ticker 后创建后续迁移窗口内的任务。
+输出是：
 
-### 关键代码
+1. 零到多条 `timer_executions`；
+2. 与新 Execution 一一对应的 `outbox_events`；
+3. Timer 更新后的 `next_fire_at` 和 `version`。
 
-```go
-func (m *Migrator) Start(ctx context.Context) {
-    // 不立即执行，等第一次 ticker
-    ticker := time.NewTicker(time.Duration(m.cfg.MigrateStepMinutes) * time.Minute)
-    defer ticker.Stop()
+三类写入必须在同一个事务中完成。
 
-    for range ticker.C {
-        m.doMigrate(ctx)
-    }
-}
+## 2. 单批调度
 
-func (m *Migrator) doMigrate(ctx context.Context) {
-    // 1. 查询所有 ACTIVE 定时器
-    definitions, _ := m.defRepo.GetActiveDefinitions()
-    
-    // 2. 计算时间范围（小时级取整）
-    now := time.Now()
-    startTime := getStartHour(now.Add(time.Duration(m.cfg.MigrateStepMinutes) * time.Minute))
-    endTime := getStartHour(now.Add(time.Duration(m.cfg.MigrateStepMinutes*2) * time.Minute))
-    
-    for _, def := range definitions {
-        // 3. 解析触发时间点
-        triggerTimes, _ := m.parser.NextTriggerTimesBefore(def.CronExpr, startTime, endTime)
-        
-        for _, triggerTime := range triggerTimes {
-            // 4. 幂等检查
-            if exists, _ := m.recRepo.ExistsByTimerIDAndTriggerTime(def.ID, triggerTime); exists {
-                continue
-            }
-            
-            // 5. 创建记录
-            m.recRepo.Create(&model.TimerRecord{...})
-            
-            // 6. 推入 Redis
-            bucket := int(def.ID) % bucketNum
-            timeRange := formatTimeRange(triggerTime)
-            m.queue.PushTask(ctx, timeRange, bucket, &redis.TaskTrigger{...})
-        }
-    }
-}
+```mermaid
+sequenceDiagram
+    participant S as Scheduler
+    participant DB as MySQL
 
-// getStartHour 将时间取整到小时
-func getStartHour(t time.Time) time.Time {
-    return time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), 0, 0, 0, t.Location())
-}
+    S->>DB: BEGIN
+    S->>DB: SELECT due timers FOR UPDATE SKIP LOCKED LIMIT N
+    loop each Timer
+        S->>S: 计算 misfire 与下一触发点
+        S->>DB: INSERT Execution ON CONFLICT DO NOTHING
+        opt Execution 是新记录
+            S->>DB: INSERT Outbox
+        end
+        S->>DB: UPDATE next_fire_at, version
+    end
+    S->>DB: COMMIT
 ```
 
-### 分桶算法
+仓库层拥有事务，服务层只负责 Cron 和 misfire 计算。事务期间不调用 Redis 或 HTTP，以免持锁时间受外部系统影响。
 
-```go
-bucket = timer_id % bucket_num
+## 3. 多副本调度
+
+`FOR UPDATE SKIP LOCKED` 让每个 Scheduler 副本跳过已被其他事务领取的 Timer，从而在 MySQL 内进行工作分配。
+
+唯一键仍然必不可少：
+
+```sql
+UNIQUE KEY uk_execution_schedule(timer_id, scheduled_at)
 ```
 
-- 同一个定时器的所有触发记录都在同一个桶中
-- 不同定时器可能在同一个桶中（hash 冲突）
-- 桶数量在配置中指定，默认 3
+行锁是并发协调手段，唯一键是业务不变量。即使发生重试、超时或未来实现变化，同一 Timer 的同一计划时间也只能有一条 Execution。
 
-## Scheduler 详解
+`version` 用于条件推进游标。如果行状态意外变化，当前事务失败并重试，避免静默覆盖。
 
-### 文件位置
+## 4. 激活、停用与删除
 
-`internal/service/scheduler.go`
+### 激活
 
-### 核心职责
+API 读取 INACTIVE Timer，按其时区计算下一触发点，并执行条件更新：
 
-- 每秒轮询一次
-- 计算当前时间范围
-- 对每个桶向 `schedulerPool` 提交分片处理 worker
-- worker 创建 token、抢到分布式锁后运行 Trigger
-
-### 执行流程
-
-```go
-func (s *Scheduler) schedule(ctx context.Context) {
-    now := time.Now()
-    
-    // 同时处理当前分钟和上一分钟，避免边界任务遗漏
-    currentTimeRange := formatTimeRange(now)
-    prevTimeRange := formatTimeRange(now.Add(-time.Minute))
-    
-    // 分别获取各分钟的动态分桶数（不同分钟可能不同）
-    currentBucketNum, _ := s.queue.GetBucketNum(ctx, currentTimeRange, s.cfg.BaseBucketNum)
-    prevBucketNum, _ := s.queue.GetBucketNum(ctx, prevTimeRange, s.cfg.BaseBucketNum)
-    
-    // 锁初始 TTL（必须大于时间片时长 60 秒）
-    lockExpiration := time.Duration(s.cfg.LockExpiration) * time.Second
-    
-    // 处理当前分钟
-    for bucket := 0; bucket < currentBucketNum; bucket++ {
-        s.handleSlice(ctx, currentTimeRange, bucket, currentBucketNum, lockExpiration)
-    }
-    // 处理上一分钟
-    for bucket := 0; bucket < prevBucketNum; bucket++ {
-        s.handleSlice(ctx, prevTimeRange, bucket, prevBucketNum, lockExpiration)
-    }
-}
-
-func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket int, bucketNum int, lockExpiration time.Duration) {
-    s.schedulerPool.Submit(func() {
-        lock := s.queue.NewSchedulerLock(timeRange, bucket)
-        acquired, _ := lock.Lock(ctx, lockExpiration)
-        if acquired {
-            s.trigger.Run(ctx, timeRange, bucket, bucketNum, lock)
-        }
-    })
-}
+```text
+INACTIVE → ACTIVE
+next_fire_at = cron.Next(now)
+version = version + 1
 ```
 
-### 锁策略
+### 停用
 
-- 锁初始 TTL = `lock_expiration`（默认 70 秒，必须大于时间片时长 60 秒）
-- Trigger 成功扫描完整分片后将锁 TTL 设置为 `success_expiration`（默认 130 秒）
-- 锁 token = `GetProcessAndGoroutineIDStr()`，由执行该分片的 worker goroutine 生成
-- `Extend` / `Release` 通过 Lua 比较 token，仅当前锁持有者能够操作锁
-- 锁粒度：每个 `{time_range}:{bucket}` 一把锁
-- 多实例部署时，同一分片只会被一个实例处理
-- 动态分桶：当前分钟和上一分钟分别获取各自的 bucketNum，避免桶数不一致导致遗漏或越界
-
-## Trigger 详解
-
-### 文件位置
-
-`internal/service/trigger.go`
-
-### 核心职责
-
-- 在时间片内持续轮询 Redis ZSet
-- 用不重叠扫描窗口读取到期任务，避免一次 Trigger 重复派发同一 member
-- 扫描成功后保留锁 TTL，覆盖上一分钟回扫
-- 每个窗口合并已有 MySQL PENDING 记录（Redis 部分投递失败兜底）
-- 提交 Executor 到独立的 `triggerPool`
-
-### 执行流程
-
-```go
-func (t *Trigger) Run(ctx context.Context, timeRange string, bucket int, bucketNum int, lock *redis.SchedulerLock) {
-    timeSliceStart, timeSliceEnd := parseMinuteRange(timeRange)
-    cursor := timeSliceStart
-    successExpiration := time.Duration(t.cfg.SuccessExpiration) * time.Second
-
-    for cursor.Before(timeSliceEnd) {
-        dueEnd := min(nextWholeSecond(time.Now()), timeSliceEnd)
-        if !cursor.Before(dueEnd) { continue }
-
-        triggers, _ := t.queue.GetTasksByTime(ctx, timeRange, bucket, cursor, dueEnd)
-        
-        // 合并已有 MySQL PENDING 记录，覆盖 Redis 部分写入失败
-        dbTriggers, _ := t.getDueTasksFromDB(ctx, timeRange, bucket, bucketNum, cursor, dueEnd)
-        triggers = mergeTaskTriggers(triggers, dbTriggers)
-        
-        // 提交 Executor
-        for _, trigger := range triggers {
-            t.triggerPool.Submit(func() {
-                t.executor.Execute(ctx, trigger)
-            })
-        }
-        cursor = dueEnd
-    }
-    lock.Extend(ctx, successExpiration)
-}
-
-// getDueTasksFromDB DB 部分投递补偿：查询 MySQL 中已存在的 PENDING 记录
-func (t *Trigger) getDueTasksFromDB(ctx context.Context, timeRange string, bucket int, bucketNum int, start, end time.Time) ([]*redis.TaskTrigger, error) {
-    records, _ := t.recRepo.GetPendingByTimeRange(start, end)
-    
-    var triggers []*redis.TaskTrigger
-    for _, record := range records {
-        if int(record.TimerID)%bucketNum != bucket {
-            continue
-        }
-        triggers = append(triggers, &redis.TaskTrigger{
-            TimerID:     record.TimerID,
-            TriggerTime: record.TriggerTime,
-        })
-    }
-    return triggers, nil
-}
+```text
+ACTIVE → INACTIVE
+next_fire_at = NULL
+version = version + 1
 ```
 
-### 时间片计算
+### 删除
 
-时间片按分钟划分：
-- 开始时间：`time_range` 对应的分钟
-- 结束边界：下一分钟起点（不包含）
+逻辑删除设置 `DELETED` 并清空 `next_fire_at`。已生成的 Execution 保留历史，不会因为 Timer 停用或删除而自动抹除。
 
-例如 `time_range = "2026-05-22-10:05"`，则时间片为 `[10:05:00, 10:06:00)`。历史分钟补扫时会立即完成全片读取。
+并发激活/停用通过 `WHERE id=? AND status=?` 条件更新解决；只有一个请求可以成功改变预期状态。
 
-## Executor 详解
+## 5. Misfire 算法
 
-### 文件位置
+设：
 
-`internal/service/executor.go`
+- `current = next_fire_at`
+- `now = 当前 UTC 时间`
+- `grace = misfire_grace_seconds`
+- `overdue = now - current > grace`
 
-### 核心职责
+行为：
 
-- 通过数据库原子状态抢占取得最终执行权
-- 查询定时器定义
-- 执行 HTTP 回调
-- HTTP 回调客户端固定 `12s` 超时，超时任务更新为 FAILED
-- 更新执行记录状态
+```text
+未超过 grace:
+  创建 current
+  next_fire_at = cron.Next(current)
 
-### 执行流程
+SKIP:
+  不创建
+  next_fire_at = cron.Next(now)
 
-```
-1. 查询包含状态的定时器定义
-   ├─ 内存缓存命中 → 直接使用
-   └─ 缓存未命中 → 查 MySQL → 写入缓存
+FIRE_ONCE:
+  创建 current
+  next_fire_at = cron.Next(now)
 
-2. 使用定义状态判断是否执行
-   ├─ ACTIVE → 继续执行
-   └─ INACTIVE/DELETED → 跳过，不删除 Redis ZSet 中已打点数据
-
-3. 原子状态抢占
-   ├─ PENDING -> RUNNING 更新成功 → 获得回调执行权
-   └─ 更新行数为 0 → 已被领取或完成，跳过
-
-4. 使用固定 `12s` 超时执行 HTTP 回调
-   ├─ 成功 → 记录 response_code/response_body
-   └─ 失败 → 标记为 FAILED
-
-5. 后处理
-   - 更新 MySQL 记录
-   - 上报 Prometheus 指标
+CATCH_UP:
+  从 current 开始创建 <= now 的触发点
+  最多 max_catch_up 条
+  next_fire_at = 第一个未创建的触发点
 ```
 
-定时器定义在创建后不提供修改操作；如需改变 Cron 或回调参数，需要删除旧定义并新建。Executor 的本地定义缓存包含状态，停用和删除后，持有旧 `ACTIVE` 缓存的执行节点可能在一个 `step2_duration` 周期内继续回调；缓存过期后会从 MySQL 加载新状态并跳过任务。已经开始执行的回调不在此保证范围内。
+当 `CATCH_UP` 达到上限但仍有积压时，Timer 仍保持到期状态，后续批次继续补偿，不会在单个事务中无限循环。
 
-## 模块间通信
+## 6. 轮询与容量
 
-```
-Migrator ──[MySQL]──> timer_records ──[Redis ZSet]──> Scheduler
-                                                      │
-                                                      ▼
-                                             [schedulerPool]
-                                                      │
-                                                      ▼
-                                                  Trigger
-                                                      │
-                                                      ▼
-                                               [triggerPool]
-                                                      │
-                                                      ▼
-                                                  Executor
-                                                      │
-                                                      ▼
-                                                  [HTTP 回调]
-```
+`poll_interval_ms` 决定空闲延迟，`batch_size` 决定单事务工作量。生产调优应观察：
 
-Scheduler 与 Trigger、Trigger 与 Executor 之间使用各自的 ants 协程池通信，而非传统的 channel 或 MQ；Migrator 独立生成并投递记录。这样做的好处：
-1. 零额外依赖（不需要 Kafka/Pulsar）
-2. 低延迟（进程内通信）
-3. 可控并发（协程池大小限制）
-4. 慢 HTTP 回调不直接占用 Scheduler 的分片扫描 worker
+- Scheduler 批次耗时；
+- 每批生成数；
+- 到期 Timer 积压；
+- MySQL 锁等待和连接池；
+- Outbox 未发布数量。
+
+增加 Scheduler 副本只改善 Timer 扫描和生成吞吐，不改善回调吞吐。回调吞吐由 Worker 副本数和每个实例的 `worker.pool_size` 决定。
+
+## 7. 不使用 Redis 分布式锁的原因
+
+Scheduler 的权威状态已经在 MySQL。用 Redis 锁保护 MySQL 游标会引入两个系统之间的锁有效期、网络分区和 fencing 问题，却仍然需要数据库唯一键兜底。
+
+当前实现直接使用 MySQL 行锁：
+
+- 锁与数据事务同生共死；
+- 事务回滚自动释放；
+- 不需要猜测任务生成要多久；
+- 避免 Redis 锁过期后两个持有者同时写 MySQL。
+
+Redis 在本系统中负责投递，不负责 Timer 调度所有权。

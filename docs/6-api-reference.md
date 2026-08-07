@@ -1,211 +1,201 @@
-# API 接口文档
+# API 参考
 
-## 基础信息
+基础路径：`/api/v1`。请求和响应均使用 JSON。
 
-- Base URL: `http://localhost:8080/api/v1`
-- Content-Type: `application/json`
+当 `security.api_key` 非空时，所有 `/api/*` 请求需要以下任一认证头：
 
-## 定时器管理
-
-### 创建定时器
-
-```
-POST /api/v1/timers
+```http
+X-API-Key: <key>
+Authorization: Bearer <key>
 ```
 
-**请求体：**
+`/health`、`/ready`、`/metrics` 和静态页面不经过 API Key 中间件，应在网关层限制公开范围。
+
+## 1. 通用响应
+
+成功：
 
 ```json
 {
-  "app": "order-service",
-  "name": "每分钟检查订单",
-  "cron_expr": "0 * * * * *",
-  "callback_url": "http://localhost:9091/callback/success",
+  "code": 200,
+  "data": {}
+}
+```
+
+失败：
+
+```json
+{
+  "code": 400,
+  "message": "错误说明"
+}
+```
+
+## 2. Timer
+
+### 创建
+
+`POST /api/v1/timers`
+
+```json
+{
+  "app": "billing",
+  "name": "hourly-summary",
+  "cron_expr": "0 0 * * * *",
+  "callback_url": "https://billing.example.com/internal/jobs/summary",
   "callback_method": "POST",
-  "callback_body": "{\"action\": \"check_orders\"}",
-  "callback_headers": {"Authorization": "Bearer token123"}
+  "callback_body": "{\"kind\":\"hourly\"}",
+  "callback_headers": {
+    "X-Service-Token": "secret"
+  },
+  "timezone": "Asia/Shanghai",
+  "misfire_policy": "FIRE_ONCE",
+  "max_catch_up": 10
 }
 ```
 
-**响应：**
+字段：
 
-```json
-{
-  "code": 201,
-  "message": "创建成功",
-  "data": {
-    "id": 1,
-    "app": "order-service",
-    "name": "每分钟检查订单",
-    "cron_expr": "0 * * * * *",
-    "callback_url": "http://localhost:9091/callback/success",
-    "callback_method": "POST",
-    "callback_body": "{\"action\": \"check_orders\"}",
-    "callback_headers": "{\"Authorization\":\"Bearer token123\"}",
-    "status": "INACTIVE",
-    "created_at": "2026-05-22T10:00:00Z",
-    "updated_at": "2026-05-22T10:00:00Z"
-  }
-}
-```
+| 字段 | 必填 | 说明 |
+| --- | --- | --- |
+| `app` | 是 | 应用标识，最长 128 |
+| `name` | 是 | Timer 名称，最长 128 |
+| `cron_expr` | 是 | 六字段 Cron |
+| `callback_url` | 是 | HTTP/HTTPS URL，受 SSRF 策略校验 |
+| `callback_method` | 是 | `GET/POST/PUT/DELETE/PATCH` |
+| `callback_body` | 否 | 原样发送的请求体 |
+| `callback_headers` | 否 | 回调头；不会在 Timer/Execution API 中回显 |
+| `timezone` | 否 | IANA 时区，默认 `UTC` |
+| `misfire_policy` | 否 | `SKIP/FIRE_ONCE/CATCH_UP`，默认 `FIRE_ONCE` |
+| `max_catch_up` | 否 | 单批最多补偿次数，1–1000 |
 
-### 查询定时器列表
+创建成功返回 `201`，初始状态为 `INACTIVE`。
 
-```
-GET /api/v1/timers?page=1&page_size=10&app=order-service&status=ACTIVE&keyword=订单
-```
+### 查询列表
 
-**查询参数：**
+`GET /api/v1/timers?page=1&page_size=20&app=billing&status=ACTIVE&keyword=summary`
 
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| page | int | 页码（默认 1） |
-| page_size | int | 每页数量（默认 10，最大 100） |
-| app | string | 应用名过滤 |
-| status | string | 状态过滤（ACTIVE/INACTIVE） |
-| keyword | string | 关键字搜索（匹配名称和 URL） |
+支持 `page`、`page_size`、`app`、`status` 和 `keyword`。逻辑删除的 Timer 不出现在列表中。
 
-**响应：**
+### 查询详情
+
+`GET /api/v1/timers/:id`
+
+敏感的 `callback_headers` 不会返回。
+
+### 激活
+
+`POST /api/v1/timers/:id/activate`
+
+只允许 `INACTIVE → ACTIVE`。成功时计算并持久化首个 `next_fire_at`。
+
+### 停用
+
+`POST /api/v1/timers/:id/deactivate`
+
+只允许 `ACTIVE → INACTIVE`，并清空 `next_fire_at`。
+
+### 删除
+
+`DELETE /api/v1/timers/:id`
+
+执行逻辑删除并停止未来调度。历史 Execution 保留到清理策略到期。
+
+## 3. Execution
+
+### 查询列表
+
+`GET /api/v1/executions?page=1&page_size=20&timer_id=1&timer_name=summary&status=FAILED`
+
+响应中的 `stats` 是当前筛选范围内按状态聚合的数量：
 
 ```json
 {
   "code": 200,
   "data": {
-    "total": 50,
+    "total": 1,
     "page": 1,
-    "page_size": 10,
-    "items": [...],
+    "page_size": 20,
+    "items": [
+      {
+        "id": 42,
+        "timer_id": 1,
+        "timer_name": "hourly-summary",
+        "scheduled_at": "2026-08-07T02:00:00Z",
+        "status": "SUCCESS",
+        "attempt": 1,
+        "max_attempts": 3,
+        "response_code": 200,
+        "duration_ms": 83
+      }
+    ],
     "stats": {
-      "total": 50,
-      "active": 32,
-      "inactive": 18
+      "SUCCESS": 1
     }
   }
 }
 ```
 
-`stats` 按当前列表筛选条件聚合，不受分页影响。
+Execution 状态：
 
-### 获取定时器详情
+- `PENDING`
+- `RUNNING`
+- `RETRY_WAIT`
+- `SUCCESS`
+- `FAILED`
+- `CANCELLED`
 
-```
-GET /api/v1/timers/:id
-```
+请求快照和敏感回调头不通过 API 返回。响应体与错误信息可能包含下游数据，访问该接口应视为运维权限。
 
-### 定义不可修改
+### 查询详情
 
-定时器定义创建后不可修改，包括 Cron 和回调参数。系统不提供 `PUT /api/v1/timers/:id` 接口；需要修改定义时，应删除旧定时器并创建新定时器。
+`GET /api/v1/executions/:id`
 
-### 回调执行约束
+### 查询 Timer 最近执行
 
-已激活任务的 HTTP 回调由 Executor 以固定 `12s` 客户端超时执行。回调超过 `12s` 未完成，或返回非 `2xx` 响应时，对应执行记录会进入 `FAILED` 并记录错误信息。
+`GET /api/v1/timers/:id/executions?limit=20`
 
-### 删除定时器
+`limit` 范围 1–100。
 
-```
-DELETE /api/v1/timers/:id
-```
+## 4. 监控
 
-逻辑删除，将状态设置为 DELETED。
+### 当前摘要
 
-### 激活定时器
+`GET /api/v1/monitoring/summary`
 
-```
-POST /api/v1/timers/:id/activate
-```
+返回 Timer 与 Execution 的全量状态计数。
 
-状态转换：INACTIVE → ACTIVE。激活后 Migrator 会自动预创建执行记录。
+### 历史曲线
 
-### 停用定时器
+`GET /api/v1/monitoring/history?range_minutes=60`
 
-```
-POST /api/v1/timers/:id/deactivate
-```
+支持 `15`、`60`、`360` 和 `1440` 分钟。API 代理查询配置的 Prometheus，返回成功率、回调 P95 和异常 Execution 数。
 
-状态转换：ACTIVE → INACTIVE。停用后不再创建新的执行记录，也不会删除已经写入 Redis ZSet 的点；Executor 使用节点本地定义缓存中的状态执行判断，因此持有旧 `ACTIVE` 缓存的节点可能在一个 `step2_duration` 周期内继续回调，缓存过期后会跳过非 `ACTIVE` 定时器。
+## 5. 运维端点
 
-## 执行记录
+| 路径 | 含义 |
+| --- | --- |
+| `/health` | 进程已启动，不检查依赖 |
+| `/ready` | 检查当前角色所需依赖 |
+| `/metrics` | Prometheus 文本指标 |
 
-### 查询执行记录列表
+每个角色都启动 HTTP 运维端口。非 API 角色访问业务路由会返回 `404`。
 
-```
-GET /api/v1/records?page=1&page_size=10&timer_name=订单&status=SUCCESS
-```
+就绪依赖：
 
-**查询参数：**
+| 角色 | MySQL | Redis |
+| --- | --- | --- |
+| `api` | 是 | 否 |
+| `scheduler` | 是 | 否 |
+| `dispatcher` | 是 | 是 |
+| `worker` | 是 | 是 |
+| `all` | 是 | 是 |
 
-| 参数 | 类型 | 说明 |
-|------|------|------|
-| page | int | 页码 |
-| page_size | int | 每页数量 |
-| timer_name | string | 定时器名称模糊过滤 |
-| timer_id | int | 定时器 ID 过滤（兼容保留） |
-| status | string | 状态过滤 |
+## 6. 安全限制
 
-响应条目包含 `timer_name`；`data.stats` 按当前列表筛选条件返回 `total`、`pending`、`running`、`success`、`failed` 聚合值，不受分页影响。列表默认按记录 ID 倒序返回，优先展示最新写入记录。
-
-### 获取指定定时器的执行记录
-
-```
-GET /api/v1/timers/:id/records?limit=20
-```
-
-### 获取执行记录详情
-
-```
-GET /api/v1/records/:id
-```
-
-## 系统端点
-
-### 健康检查
-
-```
-GET /health
-```
-
-**响应：**
-
-```json
-{
-  "status": "ok",
-  "time": "2026-05-22T10:00:00+08:00"
-}
-```
-
-### Prometheus 指标
-
-```
-GET /metrics
-```
-
-返回 Prometheus 格式的指标数据。
-
-### 监控历史趋势
-
-```
-GET /api/v1/monitoring/history?range_minutes=60
-```
-
-后端代理查询 Prometheus 并返回管理端图表使用的历史序列。`range_minutes` 支持
-`15`、`60`、`360`、`1440`，其他值按 `60` 分钟处理。返回的序列包括服务可用性、
-成功率、P95 延迟与异常任务（超期待执行和卡住执行的合计数量）。
-
-## 错误响应
-
-所有错误响应格式：
-
-```json
-{
-  "code": 400,
-  "message": "错误描述"
-}
-```
-
-| HTTP 状态码 | 说明 |
-|------------|------|
-| 200 | 成功 |
-| 201 | 创建成功 |
-| 400 | 请求参数错误 |
-| 404 | 资源不存在 |
-| 500 | 服务器内部错误 |
+- `security.max_request_bytes` 限制 API 请求体。
+- CORS 只允许 `security.allowed_origins`。
+- 默认拒绝内网、回环、链路本地和保留地址回调，防止 SSRF。
+- 本地测试必须显式设置 `security.allow_private_callbacks=true`。
+- 回调响应最多读取 `worker.max_response_bytes`。
+- 日志不记录完整请求体、回调头或 API Key。
