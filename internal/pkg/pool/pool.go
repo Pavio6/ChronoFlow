@@ -1,6 +1,7 @@
 package pool
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -43,4 +44,20 @@ func (p *GoWorkerPool) Submit(task func()) error {
 // 调用后不可再提交新任务
 func (p *GoWorkerPool) Release() {
 	p.pool.Release()
+}
+
+// ReleaseTimeout stops accepting work and waits for running workers to exit.
+func (p *GoWorkerPool) ReleaseTimeout(timeout time.Duration) error {
+	if err := p.pool.ReleaseTimeout(timeout); err != nil {
+		return fmt.Errorf("等待协程池停止失败: %w", err)
+	}
+	return nil
+}
+
+// ReleaseContext stops accepting work and shares a caller-owned shutdown deadline.
+func (p *GoWorkerPool) ReleaseContext(ctx context.Context) error {
+	if err := p.pool.ReleaseContext(ctx); err != nil {
+		return fmt.Errorf("等待协程池停止失败: %w", err)
+	}
+	return nil
 }

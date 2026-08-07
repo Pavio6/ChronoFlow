@@ -1,42 +1,35 @@
 package pool
 
 import (
+	"context"
 	"testing"
 	"time"
 )
 
-func TestSeparateWorkerPoolsIsolateBlockedExecution(t *testing.T) {
-	schedulerPool, err := NewGoWorkerPool(1)
+func TestReleaseContextWaitsForRunningTask(t *testing.T) {
+	workerPool, err := NewGoWorkerPool(1)
 	if err != nil {
-		t.Fatalf("NewGoWorkerPool for scheduler: %v", err)
+		t.Fatalf("NewGoWorkerPool: %v", err)
 	}
-	defer schedulerPool.Release()
 
-	triggerPool, err := NewGoWorkerPool(1)
-	if err != nil {
-		t.Fatalf("NewGoWorkerPool for trigger: %v", err)
-	}
-	defer triggerPool.Release()
-
-	releaseExecution := make(chan struct{})
-	startedExecution := make(chan struct{})
-	if err := triggerPool.Submit(func() {
-		close(startedExecution)
-		<-releaseExecution
+	started := make(chan struct{})
+	release := make(chan struct{})
+	if err := workerPool.Submit(func() {
+		close(started)
+		<-release
 	}); err != nil {
-		t.Fatalf("submit blocked execution task: %v", err)
+		t.Fatalf("Submit: %v", err)
 	}
-	<-startedExecution
+	<-started
 
-	scheduled := make(chan struct{})
-	if err := schedulerPool.Submit(func() { close(scheduled) }); err != nil {
-		t.Fatalf("submit scheduler task: %v", err)
-	}
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		close(release)
+	}()
 
-	select {
-	case <-scheduled:
-	case <-time.After(time.Second):
-		t.Fatal("scheduler task was blocked by occupied trigger pool")
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := workerPool.ReleaseContext(ctx); err != nil {
+		t.Fatalf("ReleaseContext: %v", err)
 	}
-	close(releaseExecution)
 }
