@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   Form,
   Input,
+  InputNumber,
   Select,
   Button,
   Space,
@@ -12,7 +13,7 @@ import {
 } from 'antd';
 import { useNavigate } from 'react-router-dom';
 import { ArrowLeftOutlined } from '@ant-design/icons';
-import type { CreateTimerRequest } from '../types';
+import type { CreateTimerRequest, MisfirePolicy } from '../types';
 import { createTimer } from '../api/tasks';
 import { HTTP_METHODS, CRON_PRESETS, APP_PRESETS } from '../utils/constants';
 
@@ -24,9 +25,12 @@ interface FormValues {
   name: string;
   cron_expr: string;
   callback_url: string;
-  callback_method: string;
+  callback_method: CreateTimerRequest['callback_method'];
   callback_body?: string;
   callback_headers?: string;
+  timezone: string;
+  misfire_policy: MisfirePolicy;
+  max_catch_up: number;
 }
 
 const TaskForm: React.FC = () => {
@@ -37,18 +41,27 @@ const TaskForm: React.FC = () => {
   const handleSubmit = async (values: FormValues) => {
     setLoading(true);
     try {
-      let headers = {};
+      let headers: Record<string, string> = {};
       if (values.callback_headers) {
         try {
-          headers = JSON.parse(values.callback_headers);
+          const parsed: unknown = JSON.parse(values.callback_headers);
+          if (
+            typeof parsed !== 'object' ||
+            parsed === null ||
+            Array.isArray(parsed) ||
+            Object.values(parsed).some((value) => typeof value !== 'string')
+          ) {
+            throw new Error('headers must be a string map');
+          }
+          headers = parsed as Record<string, string>;
         } catch {
-          message.error('请求头 JSON 格式错误');
+          message.error('请求头必须是字符串键值对 JSON 对象');
           setLoading(false);
           return;
         }
       }
-      const data = { ...values, callback_headers: headers };
-      await createTimer(data as CreateTimerRequest);
+      const data: CreateTimerRequest = { ...values, callback_headers: headers };
+      await createTimer(data);
       message.success('创建成功');
       navigate('/tasks');
     } catch (error: unknown) {
@@ -74,7 +87,13 @@ const TaskForm: React.FC = () => {
           form={form}
           layout="vertical"
           onFinish={handleSubmit}
-          initialValues={{ app: 'default', callback_method: 'POST' }}
+          initialValues={{
+            app: 'default',
+            callback_method: 'POST',
+            timezone: 'UTC',
+            misfire_policy: 'FIRE_ONCE',
+            max_catch_up: 10,
+          }}
           className="task-form"
         >
           <div className="form-section-heading">
@@ -116,6 +135,42 @@ const TaskForm: React.FC = () => {
               />
             </Space.Compact>
           </Form.Item>
+
+          <Row gutter={16}>
+            <Col xs={24} md={8}>
+              <Form.Item
+                name="timezone"
+                label="时区"
+                rules={[{ required: true }]}
+              >
+                <Input placeholder="UTC 或 Asia/Shanghai" />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item
+                name="misfire_policy"
+                label="错过触发策略"
+                rules={[{ required: true }]}
+              >
+                <Select
+                  options={[
+                    { value: 'SKIP', label: '跳过错过触发' },
+                    { value: 'FIRE_ONCE', label: '补执行一次' },
+                    { value: 'CATCH_UP', label: '按上限追赶' },
+                  ]}
+                />
+              </Form.Item>
+            </Col>
+            <Col xs={24} md={8}>
+              <Form.Item
+                name="max_catch_up"
+                label="单轮追赶上限"
+                rules={[{ required: true }]}
+              >
+                <InputNumber min={1} max={1000} style={{ width: '100%' }} />
+              </Form.Item>
+            </Col>
+          </Row>
 
           <div className="form-section-heading">
             <h2>回调配置</h2>

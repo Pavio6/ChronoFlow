@@ -1,17 +1,15 @@
-// 定时器状态枚举
-export type TimerStatus =
-  | 'ACTIVE'    // 激活状态
-  | 'INACTIVE'  // 未激活状态
-  | 'DELETED';  // 已删除
+export type TimerStatus = 'ACTIVE' | 'INACTIVE' | 'DELETED';
 
-// 执行记录状态枚举
-export type RecordStatus =
-  | 'PENDING'   // 等待执行
-  | 'RUNNING'   // 执行中
-  | 'SUCCESS'   // 执行成功
-  | 'FAILED';   // 执行失败
+export type MisfirePolicy = 'SKIP' | 'FIRE_ONCE' | 'CATCH_UP';
 
-// 定时器定义接口
+export type ExecutionStatus =
+  | 'PENDING'
+  | 'RUNNING'
+  | 'RETRY_WAIT'
+  | 'SUCCESS'
+  | 'FAILED'
+  | 'CANCELLED';
+
 export interface TimerDefinition {
   id: number;
   app: string;
@@ -20,13 +18,16 @@ export interface TimerDefinition {
   callback_url: string;
   callback_method: string;
   callback_body: string;
-  callback_headers: string;
   status: TimerStatus;
+  next_fire_at: string | null;
+  timezone: string;
+  misfire_policy: MisfirePolicy;
+  max_catch_up: number;
+  version: number;
   created_at: string;
   updated_at: string;
 }
 
-// 创建定时器请求
 export interface CreateTimerRequest {
   app: string;
   name: string;
@@ -35,9 +36,11 @@ export interface CreateTimerRequest {
   callback_method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   callback_body?: string;
   callback_headers?: Record<string, string>;
+  timezone?: string;
+  misfire_policy?: MisfirePolicy;
+  max_catch_up?: number;
 }
 
-// 定时器列表响应
 export interface TimerListResponse {
   total: number;
   page: number;
@@ -50,49 +53,39 @@ export interface TimerListResponse {
   };
 }
 
-// 执行记录接口
-export interface TimerRecord {
+export interface TimerExecution {
   id: number;
   timer_id: number;
   timer_name?: string;
-  trigger_time: string;
-  status: RecordStatus;
-  request_url: string;
-  request_method: string;
-  request_body: string;
+  scheduled_at: string;
+  status: ExecutionStatus;
+  attempt: number;
+  max_attempts: number;
+  next_attempt_at: string | null;
   response_code: number;
   response_body: string;
   error_message: string;
   started_at: string | null;
   finished_at: string | null;
-  duration: number;
+  duration_ms: number;
   created_at: string;
   updated_at: string;
 }
 
-// 执行记录列表响应
-export interface RecordListResponse {
+export interface ExecutionListResponse {
   total: number;
   page: number;
   page_size: number;
-  items: TimerRecord[];
-  stats: {
-    total: number;
-    pending: number;
-    running: number;
-    success: number;
-    failed: number;
-  };
+  items: TimerExecution[];
+  stats: Partial<Record<ExecutionStatus, number>>;
 }
 
-// API 响应通用格式
 export interface ApiResponse<T> {
   code: number;
   message?: string;
   data?: T;
 }
 
-// 定时器列表查询参数
 export interface TimerListParams {
   page?: number;
   page_size?: number;
@@ -101,58 +94,9 @@ export interface TimerListParams {
   keyword?: string;
 }
 
-// 执行记录查询参数
-export interface RecordListParams {
+export interface ExecutionListParams {
   page?: number;
   page_size?: number;
   timer_name?: string;
-  status?: RecordStatus;
-}
-
-export interface MonitoringSummary {
-  timers: {
-    total: number;
-    active: number;
-    inactive: number;
-    deleted: number;
-  };
-  records: {
-    total: number;
-    pending: number;
-    running: number;
-    success: number;
-    failed: number;
-  };
-  redis: {
-    queue_keys: number;
-    queue_items: number;
-    lock_keys: number;
-    bucket_keys: number;
-  };
-  runtime: {
-    exec_total: number;
-    exec_success: number;
-    exec_failed: number;
-    trigger_total: number;
-    avg_duration_ms: number;
-    success_rate: number;
-    last_collected_msg: string;
-  };
-  exporter: string;
-}
-
-export interface MonitoringPoint {
-  timestamp: number;
-  value: number;
-}
-
-export interface MonitoringHistory {
-  range_minutes: number;
-  step_seconds: number;
-  source: 'prometheus';
-  series: {
-    success_rate: MonitoringPoint[];
-    callback_p95_ms: MonitoringPoint[];
-    abnormal_records: MonitoringPoint[];
-  };
+  status?: ExecutionStatus;
 }

@@ -1,4 +1,4 @@
-import type { TimerStatus, RecordStatus } from '../types';
+import type { TimerStatus, ExecutionStatus } from '../types';
 
 // 定时器状态配置
 export const TIMER_STATUS_CONFIG: Record<TimerStatus, { label: string; color: string }> = {
@@ -7,12 +7,13 @@ export const TIMER_STATUS_CONFIG: Record<TimerStatus, { label: string; color: st
   DELETED: { label: '已删除', color: 'error' },
 };
 
-// 执行记录状态配置
-export const RECORD_STATUS_CONFIG: Record<RecordStatus, { label: string; color: string }> = {
+export const EXECUTION_STATUS_CONFIG: Record<ExecutionStatus, { label: string; color: string }> = {
   PENDING: { label: '等待中', color: 'default' },
   RUNNING: { label: '执行中', color: 'processing' },
+  RETRY_WAIT: { label: '等待重试', color: 'warning' },
   SUCCESS: { label: '成功', color: 'success' },
   FAILED: { label: '失败', color: 'error' },
+  CANCELLED: { label: '已取消', color: 'default' },
 };
 
 // HTTP 方法选项

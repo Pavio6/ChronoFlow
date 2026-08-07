@@ -73,6 +73,13 @@ const TaskList: React.FC = () => {
       width: 140,
       render: (text: string) => <code className="inline-code">{text}</code>,
     },
+    { title: '时区', dataIndex: 'timezone', width: 130 },
+    {
+      title: '下次触发',
+      dataIndex: 'next_fire_at',
+      width: 170,
+      render: (value: string | null) => value ? new Date(value).toLocaleString('zh-CN') : '-',
+    },
     { title: '回调地址', dataIndex: 'callback_url', width: 220, ellipsis: true },
     {
       title: '状态',
@@ -157,7 +164,7 @@ const TaskList: React.FC = () => {
           rowKey="id"
           loading={loading}
           size="middle"
-          scroll={{ x: 980 }}
+          scroll={{ x: 1280 }}
           pagination={{
             current: params.page,
             pageSize: params.page_size,
