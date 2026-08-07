@@ -6,180 +6,155 @@ import (
 	"time"
 
 	"github.com/chronoflow/internal/config"
-	"github.com/chronoflow/internal/pkg/pool"
-	"github.com/chronoflow/internal/pkg/redis"
+	"github.com/chronoflow/internal/model"
+	"github.com/chronoflow/internal/pkg/cron"
+	"github.com/chronoflow/internal/pkg/metrics"
 	"github.com/chronoflow/internal/repository"
 	"github.com/chronoflow/pkg/logger"
 	"go.uber.org/zap"
 )
 
-// Scheduler 调度器
-// 每隔 scan_interval（默认 1 秒）轮询一次，为每个二维分片抢分布式锁
-// 将分片处理提交到 schedulerPool，由 worker 抢锁后运行 Trigger
-// 核心流程：
-//  1. 计算当前分钟级时间范围 time_range
-//  2. 分别获取当前分钟和上一分钟的动态分桶数
-//  3. 对每个桶向 schedulerPool 提交 worker 协程
-//  4. worker 创建 owner token 并尝试 SETNX 抢锁，抢到后运行 Trigger
+// Scheduler turns due timer definitions into durable executions and Outbox
+// events. Redis is intentionally absent from this component.
 type Scheduler struct {
-	queue         *redis.RedisQueue
-	schedulerPool pool.WorkerPool
-	trigger       *Trigger
-	recRepo       repository.TimerRecordRepository
-	cfg           *config.SchedulerConfig
-	quit          chan struct{}
+	repo     repository.DueTimerRepository
+	parser   *cron.CronParser
+	reporter *metrics.Reporter
+	cfg      config.SchedulerConfig
+	now      func() time.Time
 }
 
-// NewScheduler 创建调度器实例
 func NewScheduler(
-	queue *redis.RedisQueue,
-	schedulerPool pool.WorkerPool,
-	trigger *Trigger,
-	recRepo repository.TimerRecordRepository,
+	repo repository.DueTimerRepository,
+	parser *cron.CronParser,
+	reporter *metrics.Reporter,
 	cfg *config.SchedulerConfig,
 ) *Scheduler {
 	return &Scheduler{
-		queue:         queue,
-		schedulerPool: schedulerPool,
-		trigger:       trigger,
-		recRepo:       recRepo,
-		cfg:           cfg,
-		quit:          make(chan struct{}),
+		repo:     repo,
+		parser:   parser,
+		reporter: reporter,
+		cfg:      *cfg,
+		now:      time.Now,
 	}
 }
 
-// Start 启动调度器
-// 每隔 scan_interval 秒轮询一次，为每个分片提交抢锁及 Trigger 处理任务
 func (s *Scheduler) Start(ctx context.Context) {
 	logger.Info("Scheduler 启动",
-		zap.Int("scan_interval", s.cfg.ScanInterval),
-		zap.Int("bucket_num", s.cfg.BucketNum),
+		zap.Int("poll_interval_ms", s.cfg.PollIntervalMS),
+		zap.Int("batch_size", s.cfg.BatchSize),
 	)
 
-	ticker := time.NewTicker(time.Duration(s.cfg.ScanInterval) * time.Second)
+	s.schedule(ctx)
+	ticker := time.NewTicker(time.Duration(s.cfg.PollIntervalMS) * time.Millisecond)
 	defer ticker.Stop()
-
 	for {
 		select {
-		case <-ticker.C:
-			s.schedule(ctx)
-		case <-s.quit:
+		case <-ctx.Done():
 			logger.Info("Scheduler 停止")
 			return
-		case <-ctx.Done():
-			logger.Info("Scheduler 因 context 取消而停止")
-			return
+		case <-ticker.C:
+			s.schedule(ctx)
 		}
 	}
 }
 
-// Stop 停止调度器
-func (s *Scheduler) Stop() {
-	close(s.quit)
-}
-
-// schedule 执行一轮调度
-// 同时处理当前分钟和上一分钟，避免边界任务遗漏
 func (s *Scheduler) schedule(ctx context.Context) {
-	now := time.Now()
-
-	// 计算当前分钟和上一分钟的时间范围
-	currentTimeRange := formatTimeRange(now)
-	prevTimeRange := formatTimeRange(now.Add(-time.Minute))
-
-	// 从 Redis 获取当前分钟的动态分桶数
-	currentBucketNum, err := s.queue.GetBucketNum(ctx, currentTimeRange, s.cfg.BaseBucketNum)
+	start := time.Now()
+	now := s.now().UTC()
+	result, err := s.repo.ScheduleDueBatch(ctx, now, s.cfg.BatchSize, s.resolveTimer)
 	if err != nil {
-		logger.Error("Scheduler 获取当前分钟动态分桶数失败，使用默认值",
-			zap.String("time_range", currentTimeRange),
-			zap.Error(err),
-		)
-		currentBucketNum = s.cfg.BaseBucketNum
-	}
-
-	// 从 Redis 获取上一分钟的动态分桶数（可能与当前分钟不同）
-	prevBucketNum, err := s.queue.GetBucketNum(ctx, prevTimeRange, s.cfg.BaseBucketNum)
-	if err != nil {
-		logger.Error("Scheduler 获取上一分钟动态分桶数失败，使用默认值",
-			zap.String("time_range", prevTimeRange),
-			zap.Error(err),
-		)
-		prevBucketNum = s.cfg.BaseBucketNum
-	}
-
-	// 锁的初始 TTL（必须大于时间片时长 60 秒）
-	lockExpiration := time.Duration(s.cfg.LockExpiration) * time.Second
-
-	// 处理当前分钟
-	for bucket := 0; bucket < currentBucketNum; bucket++ {
-		s.handleSlice(ctx, currentTimeRange, bucket, currentBucketNum, lockExpiration)
-	}
-	// 处理上一分钟，避免边界任务遗漏
-	for bucket := 0; bucket < prevBucketNum; bucket++ {
-		s.handleSlice(ctx, prevTimeRange, bucket, prevBucketNum, lockExpiration)
-	}
-}
-
-// handleSlice 处理单个时间片的单个桶：提交 worker → worker 抢锁并运行 Trigger
-func (s *Scheduler) handleSlice(ctx context.Context, timeRange string, bucket int, bucketNum int, lockExpiration time.Duration) {
-	hasWork, err := s.hasSliceWork(ctx, timeRange, bucket, bucketNum)
-	if err != nil {
-		logger.Error("Scheduler 检查分片任务失败",
-			zap.String("time_range", timeRange),
-			zap.Int("bucket", bucket),
-			zap.Error(err),
-		)
+		logger.Error("Scheduler 调度批次失败", zap.Error(err))
+		s.reporter.ReportSchedulerBatch(0, 0, 0, time.Since(start), false)
 		return
 	}
-	if !hasWork {
-		return
-	}
-
-	// 与 xTimer 一致，在负责处理分片的 worker goroutine 内创建 token 并抢锁。
-	bucketCopy := bucket
-	timeRangeCopy := timeRange
-	err = s.schedulerPool.Submit(func() {
-		lock := s.queue.NewSchedulerLock(timeRangeCopy, bucketCopy)
-		acquired, lockErr := lock.Lock(ctx, lockExpiration)
-		if lockErr != nil {
-			logger.Error("Scheduler 获取锁失败",
-				zap.String("time_range", timeRangeCopy),
-				zap.Int("bucket", bucketCopy),
-				zap.Error(lockErr),
-			)
-			return
-		}
-		if !acquired {
-			return
-		}
-		successExpiration := time.Duration(s.cfg.SuccessExpiration) * time.Second
-		ack := func() error {
-			return lock.Extend(ctx, successExpiration)
-		}
-		s.trigger.Run(ctx, timeRangeCopy, bucketCopy, bucketNum, ack)
-	})
-	if err != nil {
-		logger.Error("Scheduler 提交 Trigger 到调度协程池失败",
-			zap.String("time_range", timeRangeCopy),
-			zap.Int("bucket", bucketCopy),
-			zap.Error(err),
+	s.reporter.ReportSchedulerBatch(
+		result.Timers,
+		result.Executions,
+		result.Duplicates,
+		time.Since(start),
+		true,
+	)
+	if result.Timers > 0 {
+		logger.Info("Scheduler 调度批次完成",
+			zap.Int("timers", result.Timers),
+			zap.Int("executions", result.Executions),
+			zap.Int("duplicates", result.Duplicates),
+			zap.Duration("elapsed", time.Since(start)),
 		)
 	}
 }
 
-// hasSliceWork 判断分片是否有实际任务，避免空分片也创建 scheduler_lock
-func (s *Scheduler) hasSliceWork(ctx context.Context, timeRange string, bucket int, bucketNum int) (bool, error) {
-	exists, err := s.queue.QueueExists(ctx, timeRange, bucket)
-	if err != nil {
-		return false, err
+func (s *Scheduler) resolveTimer(
+	definition *model.TimerDefinition,
+	now time.Time,
+) ([]time.Time, time.Time, error) {
+	if definition.NextFireAt == nil {
+		return nil, time.Time{}, fmt.Errorf("ACTIVE 定时器 next_fire_at 为空")
 	}
-	if exists {
-		return true, nil
+	timezone := definition.Timezone
+	if timezone == "" {
+		timezone = "UTC"
+	}
+	location, err := time.LoadLocation(timezone)
+	if err != nil {
+		return nil, time.Time{}, fmt.Errorf("加载时区 %q 失败: %w", timezone, err)
 	}
 
-	start, err := time.ParseInLocation("2006-01-02-15:04", timeRange, time.Local)
-	if err != nil {
-		return false, fmt.Errorf("解析时间范围失败: %w", err)
+	current := definition.NextFireAt.UTC().In(location)
+	nowLocal := now.UTC().In(location)
+	nextAfter := func(from time.Time) (time.Time, error) {
+		next, err := s.parser.NextTriggerTime(definition.CronExpr, from)
+		if err != nil {
+			return time.Time{}, err
+		}
+		return next.In(location), nil
 	}
-	return s.recRepo.HasPendingByTimeRangeAndBucket(start, start.Add(time.Minute), bucket, bucketNum)
+
+	grace := time.Duration(s.cfg.MisfireGraceSeconds) * time.Second
+	overdue := now.UTC().Sub(definition.NextFireAt.UTC()) > grace
+	policy := definition.MisfirePolicy
+	if policy == "" {
+		policy = model.MisfirePolicyFireOnce
+	}
+
+	if !overdue && policy != model.MisfirePolicyCatchUp {
+		next, err := nextAfter(current)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		return []time.Time{current.UTC()}, next.UTC(), nil
+	}
+
+	switch policy {
+	case model.MisfirePolicySkip:
+		next, err := nextAfter(nowLocal)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		return nil, next.UTC(), nil
+	case model.MisfirePolicyFireOnce:
+		next, err := nextAfter(nowLocal)
+		if err != nil {
+			return nil, time.Time{}, err
+		}
+		return []time.Time{current.UTC()}, next.UTC(), nil
+	case model.MisfirePolicyCatchUp:
+		limit := definition.MaxCatchUp
+		if limit < 1 {
+			limit = s.cfg.DefaultMaxCatchUp
+		}
+		occurrences := make([]time.Time, 0, limit)
+		cursor := current
+		for !cursor.After(nowLocal) && len(occurrences) < limit {
+			occurrences = append(occurrences, cursor.UTC())
+			cursor, err = nextAfter(cursor)
+			if err != nil {
+				return nil, time.Time{}, err
+			}
+		}
+		return occurrences, cursor.UTC(), nil
+	default:
+		return nil, time.Time{}, fmt.Errorf("未知 misfire 策略: %s", policy)
+	}
 }
