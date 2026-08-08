@@ -1,8 +1,8 @@
 # ChronoFlow
 
-ChronoFlow 是一个 Go 实现的分布式定时任务调度系统。MySQL 保存权威调度状态和执行状态，Transactional Outbox 保证任务不会因 MySQL/Redis 双写失败而丢失，Redis Streams 负责跨进程投递，Worker 使用 ants 控制单实例并发。
+ChronoFlow 是一个 Go 实现的分布式定时任务调度系统。MySQL 保存 Timer、Execution 和 Outbox 状态；Scheduler 创建执行记录和 Outbox 事件；Dispatcher 发布 Redis Streams 消息；Worker 使用 ants 执行 HTTP 回调。
 
-生产环境有四个独立进程：API、Scheduler、Dispatcher、Worker。它们共享同一代码仓库、领域模型和 MySQL/Redis 协作协议，但可单独发布、扩缩容和部署到不同机器。`all` 仅用于本地联调；数据库迁移是发布前命令，不是常驻服务。
+系统包含四个独立角色：API、Scheduler、Dispatcher、Worker。它们共享代码仓库、领域模型和 MySQL/Redis 协作协议，可分别构建、启动和扩缩容。`all` 提供组合运行模式；`migrate` 提供数据库迁移命令。
 
 ## 架构
 
@@ -22,32 +22,31 @@ flowchart LR
 | --- | --- | --- | --- |
 | `api` | Timer 管理、执行查询、监控接口、静态前端 | MySQL | 无状态横向扩容 |
 | `scheduler` | 领取到期 Timer、创建 Execution/Outbox、推进 `next_fire_at`、恢复异常执行 | MySQL | 多副本，MySQL `SKIP LOCKED` 协调 |
-| `dispatcher` | 将已提交 Outbox 可靠发布到 Redis Streams | MySQL、Redis | 多副本，Outbox Lease 协调 |
+| `dispatcher` | 将已提交 Outbox 发布到 Redis Streams | MySQL、Redis | 多副本，Outbox Lease 协调 |
 | `worker` | Consumer Group 消费、MySQL Lease 抢占、ants 并发执行回调、重试 | MySQL、Redis | 按回调吞吐横向扩容 |
-| `all` | 在一个进程中运行全部角色 | MySQL、Redis | 仅用于本地开发或小规模演示 |
+| `all` | 在一个进程中运行全部角色 | MySQL、Redis | 组合运行模式 |
 
-生产构建产物：
+构建产物：
 
 ```text
 chronoflow-api
 chronoflow-scheduler
 chronoflow-dispatcher
 chronoflow-worker
-chronoflow-migrate            # 发布/运维工具，不是常驻服务
-chronoflow-all                # 仅本地联调
+chronoflow-migrate            # 数据库迁移命令
+chronoflow-all                # 组合运行模式
 ```
 
 核心语义：
 
-- `(timer_id, scheduled_at)` 唯一键保证同一计划触发点只生成一条执行记录。
+- `(timer_id, scheduled_at)` 唯一键约束同一计划触发点对应一条执行记录。
 - Execution、`next_fire_at` 和 Outbox 在同一个 MySQL 事务内提交。
-- Redis Streams 是至少一次投递；Worker 通过 MySQL Lease 和 `run_token` 抵御重复消息与过期结果。
-- Redis 暂时不可用时，Scheduler 仍可继续写 Outbox；恢复后 Dispatcher 自动补投。
-- API 和 Scheduler 不依赖 Redis，Dispatcher 和 Worker 才依赖 Redis。
+- Redis Streams 使用 Consumer Group 投递；Worker 通过 MySQL Lease 和 `run_token` 管理执行所有权与结果写入。
+- Dispatcher 按 Outbox 状态发布 Redis Streams 消息，并记录发布结果与重试时间。
 
 ## 快速启动
 
-要求：Go 1.26.2+、Node.js 22+、Docker Compose。
+服务端开发要求 Go 1.26.2+ 与 Docker Compose；前端开发要求 Node.js 22+。
 
 本地首次启动时，先启动基础依赖并执行迁移：
 
@@ -65,7 +64,7 @@ make dev-dispatcher
 make dev-worker
 ```
 
-> Docker Compose 仅负责本地依赖（MySQL、Redis、Prometheus、Grafana）。它不会自动迁移数据库；生产发布也必须在发布 API、Scheduler、Dispatcher、Worker 前，由 CI/CD 或运维人员显式执行迁移。
+Docker Compose 启动 MySQL、Redis、Prometheus 和 Grafana。`make migrate-up` 执行版本化数据库迁移。
 
 服务地址：
 
@@ -76,22 +75,13 @@ make dev-worker
 - Prometheus：`http://localhost:9090`
 - Grafana：`http://localhost:3001`
 
-本地开发可先启动依赖，再运行组合角色：
+组合运行模式：
 
 ```bash
 make dev-start
 make migrate-up
 make dev-app
 make dev-frontend
-```
-
-也可以在不同终端分别运行四个角色：
-
-```bash
-make dev-api
-make dev-scheduler
-make dev-dispatcher
-make dev-worker
 ```
 
 ## 构建与测试
@@ -103,6 +93,15 @@ go vet ./...
 docker compose config
 ```
 
+真实 MySQL、Redis 和四个独立角色进程的端到端测试：
+
+```bash
+make e2e-test
+make e2e-down  # 测试完成或排障后清理 E2E 容器
+```
+
+详细说明与覆盖场景见 [`e2e/README.md`](e2e/README.md)。
+
 `make build` 会在 `bin/` 中生成独立产物：
 
 ```bash
@@ -113,8 +112,6 @@ bin/chronoflow-worker
 bin/chronoflow-migrate
 bin/chronoflow-all
 ```
-
-当前开发阶段不提供 Dockerfile；Compose 只启动本地开发依赖。发布阶段可再为 API、Scheduler、Dispatcher、Worker 分别提供镜像，并独立调整 Worker 和 Scheduler 的副本数。
 
 ## 创建任务
 
@@ -186,7 +183,7 @@ CHRONOFLOW_SECURITY_API_KEY='replace-me'
 | `worker.lease_ttl_seconds` | 执行所有权租约 |
 | `recovery.*` | 异常恢复与历史保留 |
 | `security.api_key` | API 访问密钥 |
-| `security.allow_private_callbacks` | 是否允许内网回调；生产建议关闭 |
+| `security.allow_private_callbacks` | 内网回调地址校验开关 |
 
 ## 数据库迁移
 
@@ -211,16 +208,12 @@ go run ./cmd/migrate version
 go run ./cmd/migrate down 1
 ```
 
-`down` 是破坏性回滚操作，必须人工确认并指定步数。`force` 仅用于人工核验后修复 dirty 状态。已有数据库不要重复执行基线迁移；生产升级应先备份，并且只允许 CI/CD 或单一运维操作执行迁移。
+迁移在 DSN 指定的 MySQL 数据库中创建和维护表结构，并由 `schema_migrations` 记录版本。首次迁移前创建 DSN 指定的数据库；`up` 执行待执行版本，`down` 按步数回滚版本，`force` 设置迁移版本。
 
 ### 时间约定
 
-ChronoFlow 以**当前时间**读写 MySQL `DATETIME` 字段，程序不会再强制转换为 UTC。
+ChronoFlow 使用当前时间读写 MySQL `DATETIME` 字段，DSN 使用 `loc=Local`。
 
-未来多机部署时，所有 ChronoFlow 实例、MySQL 和执行迁移环境应使用相同的时区，避免时间解释不一致而导致任务提前或延后执行。
+多机部署中的 ChronoFlow 实例、MySQL 和迁移环境使用相同的时区。
 
-Timer 的 `timezone` 仍只用于 Cron 计算和展示语义。
-
-## 交付边界
-
-当前实现提供生产级 MVP 所需的任务生成、可靠投递、重复防护、失败重试、崩溃恢复、健康检查、安全基线和监控。它不提供 DAG、分片计算任务、人工审批、多租户资源隔离或 Kafka 级别的超大吞吐；这些属于后续产品演进范围。
+Timer 的 `timezone` 用于 Cron 计算和展示。

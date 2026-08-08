@@ -1,4 +1,4 @@
-.PHONY: dev-start dev-app dev-api dev-scheduler dev-dispatcher dev-worker dev-frontend migrate-up migrate-version migrate-down clean docker-down docker-logs build-frontend build-backend build test test-callback
+.PHONY: dev-start dev-app dev-api dev-scheduler dev-dispatcher dev-worker dev-frontend migrate-up migrate-version migrate-down clean docker-down docker-logs build-frontend build-backend build test test-callback e2e-up e2e-down e2e-test
 
 # 启动 Docker 基础依赖与可观测性栈；后端使用 make dev-app 单独启动
 dev-start:
@@ -74,6 +74,18 @@ build: build-frontend build-backend
 
 test:
 	go test -race ./...
+
+# 启动隔离的 E2E MySQL（3307）和 Redis（6380）
+e2e-up:
+	docker compose -f e2e/docker-compose.yml up -d --wait
+
+# 执行真实 API、Scheduler、Dispatcher、Worker 进程的端到端测试
+e2e-test: e2e-up
+	CHRONOFLOW_E2E=1 go test -tags=e2e -count=1 -v ./e2e
+
+# 停止并删除 E2E 专用依赖容器
+e2e-down:
+	docker compose -f e2e/docker-compose.yml down -v
 
 # 启动测试回调服务
 test-callback:
