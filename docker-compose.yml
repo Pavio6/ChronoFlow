@@ -1,8 +1,4 @@
 x-chronoflow-service: &chronoflow-service
-  build:
-    context: .
-    dockerfile: Dockerfile
-  image: chronoflow:local
   volumes:
     - ./config/config.docker.yaml:/app/config/config.yaml:ro
     - ./logs:/app/logs
@@ -15,7 +11,11 @@ x-chronoflow-service: &chronoflow-service
 services:
   chronoflow-api:
     <<: *chronoflow-service
-    command: ["api"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: api
+    image: chronoflow-api:local
     ports:
       - "8080:8080"
     depends_on:
@@ -24,7 +24,11 @@ services:
 
   chronoflow-scheduler:
     <<: *chronoflow-service
-    command: ["scheduler"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: scheduler
+    image: chronoflow-scheduler:local
     ports:
       - "8081:8081"
     environment:
@@ -35,7 +39,11 @@ services:
 
   chronoflow-dispatcher:
     <<: *chronoflow-service
-    command: ["dispatcher"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dispatcher
+    image: chronoflow-dispatcher:local
     ports:
       - "8082:8082"
     environment:
@@ -48,7 +56,11 @@ services:
 
   chronoflow-worker:
     <<: *chronoflow-service
-    command: ["worker"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: worker
+    image: chronoflow-worker:local
     ports:
       - "8083:8083"
     environment:
@@ -120,7 +132,6 @@ services:
       MYSQL_COLLATION: utf8mb4_unicode_ci
     volumes:
       - mysql-data:/var/lib/mysql
-      - ./migrations:/docker-entrypoint-initdb.d:ro
     healthcheck:
       test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
       interval: 10s
