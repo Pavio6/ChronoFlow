@@ -11,8 +11,8 @@ import (
 	"time"
 
 	"github.com/chronoflow/internal/config"
+	"github.com/chronoflow/internal/pkg/logger"
 	"github.com/chronoflow/internal/repository"
-	"github.com/chronoflow/pkg/logger"
 	"go.uber.org/zap"
 )
 
@@ -39,11 +39,11 @@ func newApplication(cfg *config.Config, role Role) (*Application, error) {
 
 	application := &Application{cfg: cfg, role: role}
 	if err := repository.InitDatabase(&cfg.Database); err != nil {
-		return application.fail(fmt.Errorf("初始化数据库失败: %w", err))
+		return application.fail(fmt.Errorf("initialize database: %w", err))
 	}
 	sqlDB, err := repository.DB.DB()
 	if err != nil {
-		return application.fail(fmt.Errorf("获取数据库连接失败: %w", err))
+		return application.fail(fmt.Errorf("get database connection: %w", err))
 	}
 	application.sqlDB = sqlDB
 	return application, nil
@@ -86,7 +86,7 @@ func (a *Application) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	logger.Info("ChronoFlow 角色启动",
+	logger.Info("ChronoFlow role started",
 		zap.String("role", string(a.role)),
 		zap.String("runtime_mode", a.role.RuntimeMode()),
 		zap.Strings("components", a.role.Components()),
@@ -98,15 +98,15 @@ func (a *Application) Run(ctx context.Context) error {
 		backgroundWG.Add(1)
 		go func() {
 			defer backgroundWG.Done()
-			logger.Info("后台组件启动", zap.String("component", component.name))
+			logger.Info("Background component started", zap.String("component", component.name))
 			component.run(runCtx)
-			logger.Info("后台组件停止", zap.String("component", component.name))
+			logger.Info("Background component stopped", zap.String("component", component.name))
 		}()
 	}
 
 	serverErr := make(chan error, 1)
 	go func() {
-		logger.Info("HTTP 服务器启动",
+		logger.Info("HTTP server started",
 			zap.String("role", string(a.role)),
 			zap.String("addr", a.server.Addr),
 		)
@@ -121,10 +121,10 @@ func (a *Application) Run(ctx context.Context) error {
 	var runErr error
 	select {
 	case <-ctx.Done():
-		logger.Info("收到关闭信号，开始优雅关闭", zap.String("role", string(a.role)))
+		logger.Info("Shutdown signal received; starting graceful shutdown", zap.String("role", string(a.role)))
 	case err := <-serverErr:
 		if err != nil {
-			runErr = fmt.Errorf("HTTP 服务器运行失败: %w", err)
+			runErr = fmt.Errorf("run HTTP server: %w", err)
 		}
 	}
 
@@ -134,7 +134,7 @@ func (a *Application) Run(ctx context.Context) error {
 	defer shutdownCancel()
 
 	if err := a.server.Shutdown(shutdownCtx); err != nil && runErr == nil {
-		runErr = fmt.Errorf("HTTP 服务器关闭失败: %w", err)
+		runErr = fmt.Errorf("shut down HTTP server: %w", err)
 	}
 
 	backgroundDone := make(chan struct{})
@@ -146,12 +146,12 @@ func (a *Application) Run(ctx context.Context) error {
 	case <-backgroundDone:
 	case <-shutdownCtx.Done():
 		if runErr == nil {
-			runErr = fmt.Errorf("等待后台组件关闭超时: %w", shutdownCtx.Err())
+			runErr = fmt.Errorf("timed out waiting for background components to stop: %w", shutdownCtx.Err())
 		}
 	}
 
 	a.closeWithContext(shutdownCtx)
-	logger.Info("ChronoFlow 角色已停止", zap.String("role", string(a.role)))
+	logger.Info("ChronoFlow role stopped", zap.String("role", string(a.role)))
 	return runErr
 }
 

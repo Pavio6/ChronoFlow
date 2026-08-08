@@ -9,8 +9,8 @@ import (
 
 	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/model"
+	"github.com/chronoflow/internal/pkg/logger"
 	"github.com/chronoflow/internal/pkg/metrics"
-	"github.com/chronoflow/pkg/logger"
 )
 
 var initOutboxTestLogger sync.Once
@@ -98,7 +98,7 @@ func newTestOutboxDispatcher(
 		"dispatcher-test",
 	)
 	dispatcher.now = func() time.Time {
-		return time.Date(2026, time.August, 7, 10, 0, 0, 0, time.UTC)
+		return time.Date(2026, time.August, 7, 10, 0, 0, 0, time.Local)
 	}
 	return dispatcher
 }

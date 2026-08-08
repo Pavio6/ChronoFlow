@@ -10,7 +10,7 @@ runtime:
   shutdown_timeout_seconds: 15
 
 database:
-  dsn: "root:123456@tcp(127.0.0.1:3306)/chronoflow?charset=utf8mb4&parseTime=True&loc=UTC"
+  dsn: "root:123456@tcp(127.0.0.1:3306)/chronoflow?charset=utf8mb4&parseTime=True&loc=Local"
   max_open_conns: 100
   max_idle_conns: 10
   conn_max_lifetime: 60  # 分钟

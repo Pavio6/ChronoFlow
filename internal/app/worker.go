@@ -6,12 +6,12 @@ import (
 	"time"
 
 	"github.com/chronoflow/internal/config"
+	"github.com/chronoflow/internal/pkg/logger"
 	"github.com/chronoflow/internal/pkg/metrics"
 	"github.com/chronoflow/internal/pkg/pool"
 	redisstream "github.com/chronoflow/internal/pkg/redis"
 	"github.com/chronoflow/internal/repository"
 	"github.com/chronoflow/internal/service"
-	"github.com/chronoflow/pkg/logger"
 	"go.uber.org/zap"
 )
 
@@ -46,16 +46,16 @@ func (a *Application) configureWorker(
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := publisher.EnsureConsumerGroup(ctx, a.cfg.Outbox.Stream, a.cfg.Outbox.ConsumerGroup); err != nil {
-		return fmt.Errorf("初始化 Redis Stream Consumer Group 失败: %w", err)
+		return fmt.Errorf("initialize Redis Stream consumer group: %w", err)
 	}
 
 	workerPool, err := pool.NewGoWorkerPool(a.cfg.Worker.PoolSize)
 	if err != nil {
-		return fmt.Errorf("创建 Worker ants Pool 失败: %w", err)
+		return fmt.Errorf("create worker ants pool: %w", err)
 	}
 	a.addCloser(func(ctx context.Context) {
 		if err := workerPool.ReleaseContext(ctx); err != nil {
-			logger.Warn("协程池未在超时时间内停止", zap.Error(err))
+			logger.Warn("Worker pool did not stop before the shutdown deadline", zap.Error(err))
 		}
 	})
 

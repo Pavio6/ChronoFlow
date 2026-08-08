@@ -61,9 +61,9 @@ func (r *recoveryRepo) RecoverBatch(
 					"(status = ? AND next_attempt_at IS NOT NULL AND next_attempt_at <= ? AND "+
 					"(last_enqueued_at IS NULL OR last_enqueued_at < ?)) OR "+
 					"(status = ? AND lease_until IS NOT NULL AND lease_until < ?)",
-				model.ExecutionStatusPending, now.UTC(), staleBefore.UTC(),
-				model.ExecutionStatusRetryWait, now.UTC(), staleBefore.UTC(),
-				model.ExecutionStatusRunning, now.UTC(),
+				model.ExecutionStatusPending, now, staleBefore,
+				model.ExecutionStatusRetryWait, now, staleBefore,
+				model.ExecutionStatusRunning, now,
 			).
 			Order("scheduled_at ASC, id ASC").
 			Limit(limit).
@@ -83,7 +83,7 @@ func (r *recoveryRepo) RecoverBatch(
 						).
 						Updates(map[string]any{
 							"status":        model.ExecutionStatusFailed,
-							"finished_at":   now.UTC(),
+							"finished_at":   now,
 							"error_message": "Execution Lease 过期且已达到最大尝试次数",
 							"lease_owner":   "",
 							"lease_until":   nil,
@@ -105,7 +105,7 @@ func (r *recoveryRepo) RecoverBatch(
 					).
 					Updates(map[string]any{
 						"status":          model.ExecutionStatusRetryWait,
-						"next_attempt_at": now.UTC(),
+						"next_attempt_at": now,
 						"lease_owner":     "",
 						"lease_until":     nil,
 						"run_token":       "",
@@ -118,14 +118,14 @@ func (r *recoveryRepo) RecoverBatch(
 			eventID := fmt.Sprintf(
 				"execution-recovery-%d-%d",
 				execution.ID,
-				now.UTC().UnixNano(),
+				now.UnixNano(),
 			)
 			event, err := newExecutionOutboxEvent(
 				execution.ID,
 				eventID,
 				model.OutboxEventExecutionRecovery,
-				now.UTC(),
-				now.UTC(),
+				now,
+				now,
 			)
 			if err != nil {
 				return err
@@ -135,7 +135,7 @@ func (r *recoveryRepo) RecoverBatch(
 			}
 			if err := tx.Model(&model.TimerExecution{}).
 				Where("id = ?", execution.ID).
-				Update("last_enqueued_at", now.UTC()).Error; err != nil {
+				Update("last_enqueued_at", now).Error; err != nil {
 				return err
 			}
 			result.Reenqueued++
@@ -143,7 +143,7 @@ func (r *recoveryRepo) RecoverBatch(
 		return nil
 	})
 	if err != nil {
-		return RecoveryResult{}, fmt.Errorf("恢复执行批次失败: %w", err)
+		return RecoveryResult{}, fmt.Errorf("recover execution batch: %w", err)
 	}
 	return result, nil
 }
@@ -160,7 +160,7 @@ func (r *recoveryRepo) Cleanup(
 			"DELETE FROM outbox_events "+
 				"WHERE published_at IS NOT NULL AND published_at < ? "+
 				"ORDER BY id LIMIT ?",
-			outboxBefore.UTC(),
+			outboxBefore,
 			limit,
 		)
 		if outbox.Error != nil {
@@ -178,7 +178,7 @@ func (r *recoveryRepo) Cleanup(
 			model.ExecutionStatusSuccess,
 			model.ExecutionStatusFailed,
 			model.ExecutionStatusCancelled,
-			executionBefore.UTC(),
+			executionBefore,
 			model.OutboxAggregateTimerExecution,
 			limit,
 		)
@@ -189,7 +189,7 @@ func (r *recoveryRepo) Cleanup(
 		return nil
 	})
 	if err != nil {
-		return CleanupResult{}, fmt.Errorf("清理历史数据失败: %w", err)
+		return CleanupResult{}, fmt.Errorf("clean up historical data: %w", err)
 	}
 	return result, nil
 }

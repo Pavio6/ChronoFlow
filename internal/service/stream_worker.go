@@ -14,11 +14,11 @@ import (
 	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/model"
 	"github.com/chronoflow/internal/pkg/callback"
+	"github.com/chronoflow/internal/pkg/logger"
 	"github.com/chronoflow/internal/pkg/metrics"
 	"github.com/chronoflow/internal/pkg/pool"
 	redisstream "github.com/chronoflow/internal/pkg/redis"
 	"github.com/chronoflow/internal/repository"
-	"github.com/chronoflow/pkg/logger"
 	"go.uber.org/zap"
 )
 
@@ -101,7 +101,7 @@ func NewConfiguredCallbackClient(
 }
 
 func (w *StreamWorker) Start(ctx context.Context) {
-	logger.Info("Redis Streams Worker 启动",
+	logger.Info("Redis Streams worker started",
 		zap.String("consumer", w.consumerID),
 		zap.Int("pool_size", w.workerCfg.PoolSize),
 	)
@@ -109,7 +109,7 @@ func (w *StreamWorker) Start(ctx context.Context) {
 	nextReclaim := w.now()
 	for {
 		if ctx.Err() != nil {
-			logger.Info("Redis Streams Worker 停止", zap.String("consumer", w.consumerID))
+			logger.Info("Redis Streams worker stopped", zap.String("consumer", w.consumerID))
 			return
 		}
 
@@ -125,7 +125,7 @@ func (w *StreamWorker) Start(ctx context.Context) {
 			)
 			if err != nil {
 				if ctx.Err() == nil {
-					logger.Error("Worker 接管 Pending 消息失败", zap.Error(err))
+					logger.Error("Worker failed to reclaim pending messages", zap.Error(err))
 				}
 			} else {
 				reclaimCursor = next
@@ -151,7 +151,7 @@ func (w *StreamWorker) Start(ctx context.Context) {
 		)
 		if err != nil {
 			if ctx.Err() == nil {
-				logger.Error("Worker 读取 Stream 失败", zap.Error(err))
+				logger.Error("Worker failed to read stream", zap.Error(err))
 			}
 			continue
 		}
@@ -170,7 +170,7 @@ func (w *StreamWorker) submit(
 	if err := w.pool.Submit(func() {
 		w.process(ctx, message, reclaimed)
 	}); err != nil {
-		logger.Error("Worker 提交 ants 任务失败",
+		logger.Error("Worker failed to submit task to ants pool",
 			zap.String("message_id", message.ID),
 			zap.Error(err),
 		)
@@ -183,7 +183,7 @@ func (w *StreamWorker) process(
 	reclaimed bool,
 ) {
 	if message.DecodeError != "" || message.ExecutionID < 1 {
-		logger.Error("Worker 丢弃无法解码的 Stream 消息",
+		logger.Error("Worker discarded malformed stream message",
 			zap.String("message_id", message.ID),
 			zap.String("error", message.DecodeError),
 		)
@@ -196,10 +196,10 @@ func (w *StreamWorker) process(
 
 	runToken, err := newRunToken()
 	if err != nil {
-		logger.Error("Worker 生成 run_token 失败", zap.Error(err))
+		logger.Error("Worker failed to generate run token", zap.Error(err))
 		return
 	}
-	startedAt := w.now().UTC()
+	startedAt := w.now()
 	execution, claimed, err := w.repo.Claim(
 		ctx,
 		message.ExecutionID,
@@ -209,14 +209,14 @@ func (w *StreamWorker) process(
 		time.Duration(w.workerCfg.LeaseTTLSeconds)*time.Second,
 	)
 	if err != nil {
-		logger.Error("Worker 抢占 Execution 失败",
+		logger.Error("Worker failed to claim execution",
 			zap.Int64("execution_id", message.ExecutionID),
 			zap.Error(err),
 		)
 		return
 	}
 	if execution == nil {
-		logger.Warn("Worker 收到不存在的 Execution",
+		logger.Warn("Worker received a missing execution",
 			zap.Int64("execution_id", message.ExecutionID),
 		)
 		w.ack(ctx, message)
@@ -270,7 +270,7 @@ func (w *StreamWorker) process(
 	heartbeatWG.Wait()
 	cancelCallback()
 	if leaseLost.Load() {
-		logger.Warn("Worker Lease 已丢失，拒绝提交过期执行结果",
+		logger.Warn("Worker lease lost; refusing to persist stale execution result",
 			zap.Int64("execution_id", execution.ID),
 		)
 		w.reporter.ReportWorkerLeaseLost()
@@ -291,7 +291,7 @@ func (w *StreamWorker) process(
 		return
 	}
 
-	finishedAt := w.now().UTC()
+	finishedAt := w.now()
 	finalizeCtx, cancelFinalize := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelFinalize()
 	updated, err := w.repo.CompleteSuccess(
@@ -305,7 +305,7 @@ func (w *StreamWorker) process(
 		finishedAt.Sub(startedAt).Milliseconds(),
 	)
 	if err != nil || !updated {
-		logger.Error("Worker 提交成功结果失败",
+		logger.Error("Worker failed to persist successful execution result",
 			zap.Int64("execution_id", execution.ID),
 			zap.Bool("updated", updated),
 			zap.Error(err),
@@ -335,7 +335,7 @@ func (w *StreamWorker) heartbeat(
 		case <-done:
 			return
 		case <-ticker.C:
-			leaseUntil := w.now().UTC().Add(
+			leaseUntil := w.now().Add(
 				time.Duration(w.workerCfg.LeaseTTLSeconds) * time.Second,
 			)
 			renewed, err := w.repo.Heartbeat(
@@ -348,7 +348,7 @@ func (w *StreamWorker) heartbeat(
 			if err != nil || !renewed {
 				leaseLost.Store(true)
 				cancel()
-				logger.Error("Worker Execution Lease 续租失败",
+				logger.Error("Worker failed to renew execution lease",
 					zap.Int64("execution_id", executionID),
 					zap.Bool("renewed", renewed),
 					zap.Error(err),
@@ -369,7 +369,7 @@ func (w *StreamWorker) finishFailure(
 	callbackErr error,
 	retryable bool,
 ) {
-	finishedAt := w.now().UTC()
+	finishedAt := w.now()
 	retryAt := finishedAt.Add(w.retryBackoff(execution.Attempt))
 	finalizeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -387,7 +387,7 @@ func (w *StreamWorker) finishFailure(
 		retryable,
 	)
 	if err != nil || !updated {
-		logger.Error("Worker 提交失败结果失败",
+		logger.Error("Worker failed to persist failed execution result",
 			zap.Int64("execution_id", execution.ID),
 			zap.Bool("updated", updated),
 			zap.Error(err),
@@ -408,7 +408,7 @@ func (w *StreamWorker) ack(ctx context.Context, message redisstream.StreamMessag
 		w.outboxCfg.ConsumerGroup,
 		message.ID,
 	); err != nil {
-		logger.Error("Worker XACK 失败",
+		logger.Error("Worker failed to acknowledge stream message",
 			zap.String("message_id", message.ID),
 			zap.Int64("execution_id", message.ExecutionID),
 			zap.Error(err),

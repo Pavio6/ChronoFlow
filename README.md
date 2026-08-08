@@ -2,7 +2,7 @@
 
 ChronoFlow 是一个 Go 实现的分布式定时任务调度系统。MySQL 保存权威调度状态和执行状态，Transactional Outbox 保证任务不会因 MySQL/Redis 双写失败而丢失，Redis Streams 负责跨进程投递，Worker 使用 ants 控制单实例并发。
 
-生产环境有四个独立进程和独立镜像：API、Scheduler、Dispatcher、Worker。它们共享同一代码仓库、领域模型和 MySQL/Redis 协作协议，但可单独发布、扩缩容和部署到不同机器。`all` 仅用于本地联调；数据库迁移是发布前命令，不是常驻服务。
+生产环境有四个独立进程：API、Scheduler、Dispatcher、Worker。它们共享同一代码仓库、领域模型和 MySQL/Redis 协作协议，但可单独发布、扩缩容和部署到不同机器。`all` 仅用于本地联调；数据库迁移是发布前命令，不是常驻服务。
 
 ## 架构
 
@@ -56,13 +56,16 @@ make dev-start
 make migrate-up
 ```
 
-然后启动全部独立角色：
+然后在不同终端启动全部独立角色：
 
 ```bash
-docker compose up -d --build
+make dev-api
+make dev-scheduler
+make dev-dispatcher
+make dev-worker
 ```
 
-> Docker Compose 不会自动迁移数据库。生产发布也必须在发布 API、Scheduler、Dispatcher、Worker 前，由 CI/CD 或运维人员显式执行迁移。
+> Docker Compose 仅负责本地依赖（MySQL、Redis、Prometheus、Grafana）。它不会自动迁移数据库；生产发布也必须在发布 API、Scheduler、Dispatcher、Worker 前，由 CI/CD 或运维人员显式执行迁移。
 
 服务地址：
 
@@ -111,7 +114,7 @@ bin/chronoflow-migrate
 bin/chronoflow-all
 ```
 
-Dockerfile 提供 `api`、`scheduler`、`dispatcher`、`worker`、`migrate`、`all` 六个 build target。Compose 分别构建四个常驻角色镜像；Worker 和 Scheduler 的副本数可以独立调整。
+当前开发阶段不提供 Dockerfile；Compose 只启动本地开发依赖。发布阶段可再为 API、Scheduler、Dispatcher、Worker 分别提供镜像，并独立调整 Worker 和 Scheduler 的副本数。
 
 ## 创建任务
 
@@ -166,7 +169,7 @@ curl -X POST http://localhost:8080/api/v1/timers/1/activate
 
 ```bash
 CHRONOFLOW_SERVER_PORT=8081
-CHRONOFLOW_DATABASE_DSN='user:pass@tcp(mysql:3306)/chronoflow?charset=utf8mb4&parseTime=True&loc=UTC'
+CHRONOFLOW_DATABASE_DSN='user:pass@tcp(mysql:3306)/chronoflow?charset=utf8mb4&parseTime=True&loc=Local'
 CHRONOFLOW_REDIS_ADDR='redis:6379'
 CHRONOFLOW_SECURITY_API_KEY='replace-me'
 ```
@@ -210,7 +213,13 @@ go run ./cmd/migrate down 1
 
 `down` 是破坏性回滚操作，必须人工确认并指定步数。`force` 仅用于人工核验后修复 dirty 状态。已有数据库不要重复执行基线迁移；生产升级应先备份，并且只允许 CI/CD 或单一运维操作执行迁移。
 
-所有调度时间按 UTC 写入 MySQL，Timer 的 `timezone` 仅用于 Cron 计算和展示语义。
+### 时间约定
+
+ChronoFlow 以**当前时间**读写 MySQL `DATETIME` 字段，程序不会再强制转换为 UTC。
+
+未来多机部署时，所有 ChronoFlow 实例、MySQL 和执行迁移环境应使用相同的时区，避免时间解释不一致而导致任务提前或延后执行。
+
+Timer 的 `timezone` 仍只用于 Cron 计算和展示语义。
 
 ## 交付边界
 

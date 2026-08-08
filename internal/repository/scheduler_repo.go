@@ -54,33 +54,33 @@ func (r *dueTimerRepo) ScheduleDueBatch(
 		var timers []*model.TimerDefinition
 		if err := tx.
 			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
-			Where("status = ? AND next_fire_at IS NOT NULL AND next_fire_at <= ?", model.TimerStatusActive, now.UTC()).
+			Where("status = ? AND next_fire_at IS NOT NULL AND next_fire_at <= ?", model.TimerStatusActive, now).
 			Order("next_fire_at ASC, id ASC").
 			Limit(batchSize).
 			Find(&timers).Error; err != nil {
-			return fmt.Errorf("领取到期定时器失败: %w", err)
+			return fmt.Errorf("claim due timers: %w", err)
 		}
 
 		for _, definition := range timers {
 			occurrences, nextFireAt, err := resolve(definition, now)
 			if err != nil {
-				return fmt.Errorf("计算定时器 %d 触发点失败: %w", definition.ID, err)
+				return fmt.Errorf("resolve occurrences for timer %d: %w", definition.ID, err)
 			}
 			if nextFireAt.IsZero() {
-				return fmt.Errorf("定时器 %d 的 next_fire_at 不能为空", definition.ID)
+				return fmt.Errorf("timer %d has an empty next_fire_at", definition.ID)
 			}
 
 			requestSnapshot, err := buildRequestSnapshot(definition)
 			if err != nil {
-				return fmt.Errorf("构建定时器 %d 请求快照失败: %w", definition.ID, err)
+				return fmt.Errorf("build request snapshot for timer %d: %w", definition.ID, err)
 			}
 			for _, scheduledAt := range occurrences {
 				execution := &model.TimerExecution{
 					TimerID:         definition.ID,
-					ScheduledAt:     scheduledAt.UTC(),
+					ScheduledAt:     scheduledAt,
 					Status:          model.ExecutionStatusPending,
 					MaxAttempts:     3,
-					LastEnqueuedAt:  timePointer(now.UTC()),
+					LastEnqueuedAt:  timePointer(now),
 					RequestSnapshot: requestSnapshot,
 				}
 				createResult := tx.Clauses(clause.OnConflict{
@@ -91,7 +91,7 @@ func (r *dueTimerRepo) ScheduleDueBatch(
 					DoNothing: true,
 				}).Create(execution)
 				if createResult.Error != nil {
-					return fmt.Errorf("创建执行记录失败: %w", createResult.Error)
+					return fmt.Errorf("create execution: %w", createResult.Error)
 				}
 				if createResult.RowsAffected == 0 {
 					result.Duplicates++
@@ -103,10 +103,10 @@ func (r *dueTimerRepo) ScheduleDueBatch(
 					"event_id":     eventID,
 					"execution_id": execution.ID,
 					"event_type":   model.OutboxEventExecutionReady,
-					"created_at":   now.UTC().Format(time.RFC3339Nano),
+					"created_at":   now.Format(time.RFC3339Nano),
 				})
 				if err != nil {
-					return fmt.Errorf("序列化 Outbox 事件失败: %w", err)
+					return fmt.Errorf("marshal outbox event: %w", err)
 				}
 				event := &model.OutboxEvent{
 					EventID:       eventID,
@@ -114,10 +114,10 @@ func (r *dueTimerRepo) ScheduleDueBatch(
 					AggregateID:   execution.ID,
 					EventType:     model.OutboxEventExecutionReady,
 					Payload:       string(payload),
-					AvailableAt:   now.UTC(),
+					AvailableAt:   now,
 				}
 				if err := tx.Create(event).Error; err != nil {
-					return fmt.Errorf("创建 Outbox 事件失败: %w", err)
+					return fmt.Errorf("create outbox event: %w", err)
 				}
 				result.Executions++
 			}
@@ -125,14 +125,14 @@ func (r *dueTimerRepo) ScheduleDueBatch(
 			update := tx.Model(&model.TimerDefinition{}).
 				Where("id = ? AND version = ?", definition.ID, definition.Version).
 				Updates(map[string]any{
-					"next_fire_at": nextFireAt.UTC(),
+					"next_fire_at": nextFireAt,
 					"version":      gorm.Expr("version + 1"),
 				})
 			if update.Error != nil {
-				return fmt.Errorf("推进 next_fire_at 失败: %w", update.Error)
+				return fmt.Errorf("advance next_fire_at: %w", update.Error)
 			}
 			if update.RowsAffected != 1 {
-				return fmt.Errorf("推进 next_fire_at 发生版本冲突, timer_id=%d", definition.ID)
+				return fmt.Errorf("next_fire_at version conflict, timer_id=%d", definition.ID)
 			}
 			result.Timers++
 		}

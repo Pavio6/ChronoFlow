@@ -85,8 +85,8 @@ func TestTimerServiceCreateDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	if definition.Timezone != "UTC" {
-		t.Fatalf("timezone = %q, want UTC", definition.Timezone)
+	if definition.Timezone != time.Local.String() {
+		t.Fatalf("timezone = %q, want %q", definition.Timezone, time.Local.String())
 	}
 	if definition.MisfirePolicy != model.MisfirePolicyFireOnce {
 		t.Fatalf("misfire policy = %q, want FIRE_ONCE", definition.MisfirePolicy)
@@ -118,7 +118,7 @@ func TestTimerServiceActivationAndDeactivation(t *testing.T) {
 			ID:            7,
 			CronExpr:      "0 * * * * *",
 			Status:        model.TimerStatusInactive,
-			Timezone:      "UTC",
+			Timezone:      "Local",
 			MisfirePolicy: model.MisfirePolicyFireOnce,
 		},
 	}
@@ -130,7 +130,7 @@ func TestTimerServiceActivationAndDeactivation(t *testing.T) {
 	if repo.transitionFrom != model.TimerStatusInactive || repo.transitionTo != model.TimerStatusActive {
 		t.Fatalf("activation transition = %s -> %s", repo.transitionFrom, repo.transitionTo)
 	}
-	if repo.transitionNext == nil || !repo.transitionNext.After(time.Now().UTC()) {
+	if repo.transitionNext == nil || !repo.transitionNext.After(time.Now()) {
 		t.Fatalf("activation next_fire_at = %v, want future time", repo.transitionNext)
 	}
 

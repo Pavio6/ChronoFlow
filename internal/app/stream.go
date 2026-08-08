@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/chronoflow/internal/pkg/logger"
 	redisstream "github.com/chronoflow/internal/pkg/redis"
-	"github.com/chronoflow/pkg/logger"
 	goredis "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
@@ -19,11 +19,11 @@ type streamDependencies struct {
 func (a *Application) connectStream() (*streamDependencies, error) {
 	client, err := redisstream.InitRedis(a.cfg.Redis.Addr, a.cfg.Redis.Password, a.cfg.Redis.DB)
 	if err != nil {
-		return nil, fmt.Errorf("初始化 Redis 失败: %w", err)
+		return nil, fmt.Errorf("initialize Redis: %w", err)
 	}
 	a.addCloser(func(context.Context) {
 		if err := client.Close(); err != nil {
-			logger.Warn("关闭 Redis 连接失败", zap.Error(err))
+			logger.Warn("Failed to close Redis connection", zap.Error(err))
 		}
 	})
 

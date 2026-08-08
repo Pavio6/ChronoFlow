@@ -69,7 +69,6 @@ func (r *timerExecutionRepo) Claim(
 	now time.Time,
 	leaseTTL time.Duration,
 ) (*model.TimerExecution, bool, error) {
-	now = now.UTC()
 	leaseUntil := now.Add(leaseTTL)
 	result := r.db.WithContext(ctx).
 		Model(&model.TimerExecution{}).
@@ -96,7 +95,7 @@ func (r *timerExecutionRepo) Claim(
 			"duration_ms":   0,
 		})
 	if result.Error != nil {
-		return nil, false, fmt.Errorf("抢占执行记录失败: %w", result.Error)
+		return nil, false, fmt.Errorf("claim execution: %w", result.Error)
 	}
 
 	var execution model.TimerExecution
@@ -104,7 +103,7 @@ func (r *timerExecutionRepo) Claim(
 		if err == gorm.ErrRecordNotFound {
 			return nil, false, nil
 		}
-		return nil, false, fmt.Errorf("读取执行记录失败: %w", err)
+		return nil, false, fmt.Errorf("read execution: %w", err)
 	}
 	return &execution, result.RowsAffected == 1, nil
 }
@@ -125,9 +124,9 @@ func (r *timerExecutionRepo) Heartbeat(
 			owner,
 			runToken,
 		).
-		Update("lease_until", leaseUntil.UTC())
+		Update("lease_until", leaseUntil)
 	if result.Error != nil {
-		return false, fmt.Errorf("续租执行记录失败: %w", result.Error)
+		return false, fmt.Errorf("renew execution lease: %w", result.Error)
 	}
 	return result.RowsAffected == 1, nil
 }
@@ -153,7 +152,7 @@ func (r *timerExecutionRepo) CompleteSuccess(
 		).
 		Updates(map[string]any{
 			"status":          model.ExecutionStatusSuccess,
-			"finished_at":     finishedAt.UTC(),
+			"finished_at":     finishedAt,
 			"response_code":   responseCode,
 			"response_body":   responseBody,
 			"error_message":   "",
@@ -164,7 +163,7 @@ func (r *timerExecutionRepo) CompleteSuccess(
 			"next_attempt_at": nil,
 		})
 	if result.Error != nil {
-		return false, fmt.Errorf("提交执行成功状态失败: %w", result.Error)
+		return false, fmt.Errorf("persist successful execution state: %w", result.Error)
 	}
 	return result.RowsAffected == 1, nil
 }
@@ -186,7 +185,7 @@ func (r *timerExecutionRepo) CompleteFailure(
 	updated := false
 	err := r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		updates := map[string]any{
-			"finished_at":   finishedAt.UTC(),
+			"finished_at":   finishedAt,
 			"response_code": responseCode,
 			"response_body": responseBody,
 			"error_message": errorMessage,
@@ -197,8 +196,8 @@ func (r *timerExecutionRepo) CompleteFailure(
 		}
 		if retryScheduled {
 			updates["status"] = model.ExecutionStatusRetryWait
-			updates["next_attempt_at"] = retryAt.UTC()
-			updates["last_enqueued_at"] = retryAt.UTC()
+			updates["next_attempt_at"] = retryAt
+			updates["last_enqueued_at"] = retryAt
 		} else {
 			updates["status"] = model.ExecutionStatusFailed
 			updates["next_attempt_at"] = nil
@@ -228,8 +227,8 @@ func (r *timerExecutionRepo) CompleteFailure(
 			execution.ID,
 			fmt.Sprintf("execution-retry-%d-%d", execution.ID, execution.Attempt),
 			model.OutboxEventExecutionRetry,
-			retryAt.UTC(),
-			finishedAt.UTC(),
+			retryAt,
+			finishedAt,
 		)
 		if err != nil {
 			return err
@@ -237,7 +236,7 @@ func (r *timerExecutionRepo) CompleteFailure(
 		return tx.Create(event).Error
 	})
 	if err != nil {
-		return false, false, fmt.Errorf("提交执行失败状态失败: %w", err)
+		return false, false, fmt.Errorf("persist failed execution state: %w", err)
 	}
 	return updated, updated && retryScheduled, nil
 }
@@ -255,7 +254,7 @@ func (r *timerExecutionRepo) CountByStatus(
 		Select("status, count(*) AS count").
 		Group("status").
 		Find(&rows).Error; err != nil {
-		return nil, fmt.Errorf("统计执行状态失败: %w", err)
+		return nil, fmt.Errorf("count execution statuses: %w", err)
 	}
 	result := make(map[model.ExecutionStatus]int64, len(rows))
 	for _, item := range rows {
@@ -275,10 +274,10 @@ func newExecutionOutboxEvent(
 		"event_id":     eventID,
 		"execution_id": executionID,
 		"event_type":   eventType,
-		"created_at":   createdAt.UTC().Format(time.RFC3339Nano),
+		"created_at":   createdAt.Format(time.RFC3339Nano),
 	})
 	if err != nil {
-		return nil, fmt.Errorf("序列化执行 Outbox 失败: %w", err)
+		return nil, fmt.Errorf("marshal execution outbox event: %w", err)
 	}
 	return &model.OutboxEvent{
 		EventID:       eventID,
@@ -286,6 +285,6 @@ func newExecutionOutboxEvent(
 		AggregateID:   executionID,
 		EventType:     eventType,
 		Payload:       string(payload),
-		AvailableAt:   availableAt.UTC(),
+		AvailableAt:   availableAt,
 	}, nil
 }

@@ -8,9 +8,9 @@ import (
 
 	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/model"
+	"github.com/chronoflow/internal/pkg/logger"
 	"github.com/chronoflow/internal/pkg/metrics"
 	"github.com/chronoflow/internal/repository"
-	"github.com/chronoflow/pkg/logger"
 	"go.uber.org/zap"
 )
 
@@ -52,7 +52,7 @@ func NewOutboxDispatcher(
 }
 
 func (d *OutboxDispatcher) Start(ctx context.Context) {
-	logger.Info("Outbox Dispatcher 启动",
+	logger.Info("Outbox dispatcher started",
 		zap.String("owner", d.owner),
 		zap.String("stream", d.cfg.Stream),
 		zap.Int("batch_size", d.cfg.BatchSize),
@@ -64,7 +64,7 @@ func (d *OutboxDispatcher) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("Outbox Dispatcher 停止", zap.String("owner", d.owner))
+			logger.Info("Outbox dispatcher stopped", zap.String("owner", d.owner))
 			return
 		case <-ticker.C:
 			d.dispatchOnce(ctx)
@@ -73,7 +73,7 @@ func (d *OutboxDispatcher) Start(ctx context.Context) {
 }
 
 func (d *OutboxDispatcher) dispatchOnce(ctx context.Context) {
-	now := d.now().UTC()
+	now := d.now()
 	events, err := d.repo.ClaimBatch(
 		ctx,
 		d.owner,
@@ -82,7 +82,7 @@ func (d *OutboxDispatcher) dispatchOnce(ctx context.Context) {
 		time.Duration(d.cfg.ClaimTTLSeconds)*time.Second,
 	)
 	if err != nil {
-		logger.Error("Outbox Dispatcher 领取事件失败", zap.Error(err))
+		logger.Error("Outbox dispatcher failed to claim events", zap.Error(err))
 		d.refreshBacklogMetric(ctx)
 		return
 	}
@@ -107,13 +107,13 @@ func (d *OutboxDispatcher) dispatchOnce(ctx context.Context) {
 				nextAttempt,
 			)
 			if markErr != nil {
-				logger.Error("Outbox Dispatcher 记录发布失败状态失败",
+				logger.Error("Outbox dispatcher failed to record publish failure",
 					zap.String("event_id", event.EventID),
 					zap.Error(markErr),
 				)
 			}
 			d.reporter.ReportOutboxPublish(false)
-			logger.Warn("Outbox Dispatcher 发布 Redis Stream 失败",
+			logger.Warn("Outbox dispatcher failed to publish to Redis Stream",
 				zap.String("event_id", event.EventID),
 				zap.Time("next_attempt_at", nextAttempt),
 				zap.Error(publishErr),
@@ -126,13 +126,13 @@ func (d *OutboxDispatcher) dispatchOnce(ctx context.Context) {
 			event.EventID,
 			d.owner,
 			messageID,
-			d.now().UTC(),
+			d.now(),
 		); err != nil {
 			// The Redis message already exists. Leaving the claim to expire makes
 			// the event publish again, and the future Worker must deduplicate via
 			// its MySQL execution claim.
 			d.reporter.ReportOutboxPublish(false)
-			logger.Error("Outbox Dispatcher 确认发布结果失败，事件可能重复投递",
+			logger.Error("Outbox dispatcher failed to confirm publication; event may be delivered again",
 				zap.String("event_id", event.EventID),
 				zap.String("message_id", messageID),
 				zap.Error(err),
@@ -148,7 +148,7 @@ func (d *OutboxDispatcher) dispatchOnce(ctx context.Context) {
 func (d *OutboxDispatcher) refreshBacklogMetric(ctx context.Context) {
 	count, err := d.repo.CountUnpublished(ctx)
 	if err != nil {
-		logger.Error("Outbox Dispatcher 统计积压失败", zap.Error(err))
+		logger.Error("Outbox dispatcher failed to count backlog", zap.Error(err))
 		return
 	}
 	d.reporter.SetOutboxUnpublished(count)

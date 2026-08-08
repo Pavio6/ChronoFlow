@@ -3,7 +3,7 @@ package middleware
 import (
 	"time"
 
-	"github.com/chronoflow/pkg/logger"
+	"github.com/chronoflow/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
@@ -24,7 +24,7 @@ func Logger() gin.HandlerFunc {
 		statusCode := c.Writer.Status()
 
 		// 使用 zap 日志记录请求详情
-		logger.Info("HTTP 请求",
+		logger.Info("HTTP request",
 			zap.String("method", c.Request.Method),
 			zap.String("path", c.Request.URL.Path),
 			zap.Int("status", statusCode),

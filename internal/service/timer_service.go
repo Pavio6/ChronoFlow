@@ -45,7 +45,7 @@ func (s *TimerService) Create(req *model.CreateTimerDefinitionRequest) (*model.T
 	}
 	timezone := req.Timezone
 	if timezone == "" {
-		timezone = "UTC"
+		timezone = time.Local.String()
 	}
 	location, err := time.LoadLocation(timezone)
 	if err != nil {
@@ -183,12 +183,12 @@ func (s *TimerService) Activate(id int64) error {
 	if err != nil {
 		return fmt.Errorf("计算下一次触发时间失败: %w", err)
 	}
-	nextUTC := next.UTC()
+	nextLocal := next.Local()
 	if err := s.defRepo.UpdateScheduleState(
 		def.ID,
 		model.TimerStatusInactive,
 		model.TimerStatusActive,
-		&nextUTC,
+		&nextLocal,
 	); err != nil {
 		return fmt.Errorf("更新定时器激活状态失败: %w", err)
 	}

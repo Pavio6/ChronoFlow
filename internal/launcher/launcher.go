@@ -9,7 +9,7 @@ import (
 
 	"github.com/chronoflow/internal/app"
 	"github.com/chronoflow/internal/config"
-	"github.com/chronoflow/pkg/logger"
+	"github.com/chronoflow/internal/pkg/logger"
 )
 
 // Builder constructs one independently deployed ChronoFlow role.
@@ -18,7 +18,7 @@ type Builder func(*config.Config) (*app.Application, error)
 // Main loads shared runtime configuration and starts exactly one role.
 func Main(build Builder) {
 	if err := Run(build); err != nil {
-		fmt.Fprintf(os.Stderr, "ChronoFlow 启动失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ChronoFlow failed to start: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -30,7 +30,7 @@ func Run(build Builder) error {
 	}
 	cfg, err := config.Load("./config")
 	if err != nil {
-		return fmt.Errorf("加载配置失败: %w", err)
+		return fmt.Errorf("load configuration: %w", err)
 	}
 
 	logger.Init(cfg.Log.Level, cfg.Log.Format, cfg.Log.Output, cfg.Log.FilePath)

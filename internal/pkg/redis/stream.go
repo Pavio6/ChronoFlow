@@ -54,7 +54,7 @@ func (c *StreamConsumer) ReadNew(
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("读取 Redis Stream Consumer Group 失败: %w", err)
+		return nil, fmt.Errorf("read Redis Stream consumer group: %w", err)
 	}
 	return decodeStreams(result)
 }
@@ -80,7 +80,7 @@ func (c *StreamConsumer) AutoClaim(
 		return nil, "0-0", nil
 	}
 	if err != nil {
-		return nil, start, fmt.Errorf("接管 Redis Stream Pending 消息失败: %w", err)
+		return nil, start, fmt.Errorf("claim Redis Stream pending messages: %w", err)
 	}
 	return decodeMessages(messages), next, nil
 }
@@ -93,7 +93,7 @@ func (c *StreamConsumer) Ack(
 ) error {
 	_, err := c.client.XAck(ctx, stream, group, messageID).Result()
 	if err != nil {
-		return fmt.Errorf("确认 Redis Stream 消息失败: %w", err)
+		return fmt.Errorf("acknowledge Redis Stream message: %w", err)
 	}
 	// XACK is intentionally idempotent. During lease recovery two local
 	// handlers can finish around the same time; the first one removes the
@@ -108,7 +108,7 @@ func (c *StreamConsumer) PendingCount(
 ) (int64, error) {
 	pending, err := c.client.XPending(ctx, stream, group).Result()
 	if err != nil {
-		return 0, fmt.Errorf("读取 Redis Stream Pending 状态失败: %w", err)
+		return 0, fmt.Errorf("read Redis Stream pending state: %w", err)
 	}
 	return pending.Count, nil
 }
@@ -121,17 +121,17 @@ func (c *StreamConsumer) TrimAcknowledgedBefore(
 	group string,
 	cutoff time.Time,
 ) (int64, error) {
-	minID := fmt.Sprintf("%d-0", cutoff.UTC().UnixMilli())
+	minID := fmt.Sprintf("%d-0", cutoff.UnixMilli())
 	pending, err := c.client.XPending(ctx, stream, group).Result()
 	if err != nil {
-		return 0, fmt.Errorf("读取 Stream Pending 边界失败: %w", err)
+		return 0, fmt.Errorf("read Redis Stream pending boundary: %w", err)
 	}
 	if pending.Count > 0 && streamIDLess(pending.Lower, minID) {
 		minID = pending.Lower
 	}
 	trimmed, err := c.client.XTrimMinID(ctx, stream, minID).Result()
 	if err != nil {
-		return 0, fmt.Errorf("清理已确认 Stream 历史失败: %w", err)
+		return 0, fmt.Errorf("trim acknowledged Redis Stream history: %w", err)
 	}
 	return trimmed, nil
 }
@@ -204,7 +204,7 @@ func (p *StreamPublisher) EnsureConsumerGroup(
 ) error {
 	err := p.client.XGroupCreateMkStream(ctx, stream, group, "0").Err()
 	if err != nil && !strings.Contains(err.Error(), "BUSYGROUP") {
-		return fmt.Errorf("创建 Redis Stream Consumer Group 失败: %w", err)
+		return fmt.Errorf("create Redis Stream consumer group: %w", err)
 	}
 	return nil
 }
@@ -227,7 +227,7 @@ func (p *StreamPublisher) Publish(
 		},
 	}).Result()
 	if err != nil {
-		return "", fmt.Errorf("发布 Redis Stream 消息失败: %w", err)
+		return "", fmt.Errorf("publish Redis Stream message: %w", err)
 	}
 	return messageID, nil
 }

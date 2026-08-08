@@ -21,7 +21,7 @@ func InitRedis(addr, password string, db int) (*goredis.Client, error) {
 	defer cancel()
 	if err := client.Ping(ctx).Err(); err != nil {
 		_ = client.Close()
-		return nil, fmt.Errorf("Redis 连接失败: %w", err)
+		return nil, fmt.Errorf("connect to Redis: %w", err)
 	}
 	return client, nil
 }

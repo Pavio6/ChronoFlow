@@ -19,7 +19,7 @@ type TimerExecution struct {
 	ID              int64           `gorm:"primaryKey;autoIncrement" json:"id"`
 	TimerID         int64           `gorm:"not null;uniqueIndex:uk_execution_schedule;index" json:"timer_id"`
 	TimerName       string          `gorm:"column:timer_name;->;-:migration" json:"timer_name,omitempty"`
-	ScheduledAt     time.Time       `gorm:"not null;uniqueIndex:uk_execution_schedule;index;comment:计划触发时间(UTC)" json:"scheduled_at"`
+	ScheduledAt     time.Time       `gorm:"not null;uniqueIndex:uk_execution_schedule;index;comment:计划触发时间(宿主机本地时区)" json:"scheduled_at"`
 	Status          ExecutionStatus `gorm:"size:32;not null;default:PENDING;index:idx_execution_recovery,priority:1" json:"status"`
 	Attempt         int             `gorm:"type:int;not null;default:0" json:"attempt"`
 	MaxAttempts     int             `gorm:"type:int;not null;default:3" json:"max_attempts"`

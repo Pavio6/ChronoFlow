@@ -42,7 +42,7 @@ func newTestScheduler() *Scheduler {
 
 func TestSchedulerNormalOccurrence(t *testing.T) {
 	scheduler := newTestScheduler()
-	now := time.Date(2026, time.August, 7, 10, 0, 0, 500000000, time.UTC)
+	now := time.Date(2026, time.August, 7, 10, 0, 0, 500000000, time.Local)
 	due := now.Truncate(time.Second)
 	definition := testDefinition(due, model.MisfirePolicyFireOnce)
 
@@ -60,8 +60,8 @@ func TestSchedulerNormalOccurrence(t *testing.T) {
 
 func TestSchedulerMisfirePolicies(t *testing.T) {
 	scheduler := newTestScheduler()
-	now := time.Date(2026, time.August, 7, 10, 5, 30, 0, time.UTC)
-	due := time.Date(2026, time.August, 7, 10, 0, 0, 0, time.UTC)
+	now := time.Date(2026, time.August, 7, 10, 5, 30, 0, time.Local)
+	due := time.Date(2026, time.August, 7, 10, 0, 0, 0, time.Local)
 
 	tests := []struct {
 		name            string
@@ -74,20 +74,20 @@ func TestSchedulerMisfirePolicies(t *testing.T) {
 			name:            "skip",
 			policy:          model.MisfirePolicySkip,
 			wantOccurrences: 0,
-			wantNext:        time.Date(2026, time.August, 7, 10, 6, 0, 0, time.UTC),
+			wantNext:        time.Date(2026, time.August, 7, 10, 6, 0, 0, time.Local),
 		},
 		{
 			name:            "fire once",
 			policy:          model.MisfirePolicyFireOnce,
 			wantOccurrences: 1,
-			wantNext:        time.Date(2026, time.August, 7, 10, 6, 0, 0, time.UTC),
+			wantNext:        time.Date(2026, time.August, 7, 10, 6, 0, 0, time.Local),
 		},
 		{
 			name:            "catch up capped",
 			policy:          model.MisfirePolicyCatchUp,
 			maxCatchUp:      3,
 			wantOccurrences: 3,
-			wantNext:        time.Date(2026, time.August, 7, 10, 3, 0, 0, time.UTC),
+			wantNext:        time.Date(2026, time.August, 7, 10, 3, 0, 0, time.Local),
 		},
 	}
 
@@ -111,19 +111,19 @@ func TestSchedulerMisfirePolicies(t *testing.T) {
 
 func TestSchedulerUsesTimerTimezone(t *testing.T) {
 	scheduler := newTestScheduler()
-	dueUTC := time.Date(2026, time.August, 7, 2, 0, 0, 0, time.UTC)
-	definition := testDefinition(dueUTC, model.MisfirePolicyFireOnce)
+	dueLocal := time.Date(2026, time.August, 7, 10, 0, 0, 0, time.Local)
+	definition := testDefinition(dueLocal, model.MisfirePolicyFireOnce)
 	definition.CronExpr = "0 0 10 * * *"
 	definition.Timezone = "Asia/Shanghai"
 
-	occurrences, next, err := scheduler.resolveTimer(definition, dueUTC)
+	occurrences, next, err := scheduler.resolveTimer(definition, dueLocal)
 	if err != nil {
 		t.Fatalf("resolveTimer: %v", err)
 	}
-	if len(occurrences) != 1 || !occurrences[0].Equal(dueUTC) {
-		t.Fatalf("occurrences = %v, want %s", occurrences, dueUTC)
+	if len(occurrences) != 1 || !occurrences[0].Equal(dueLocal) {
+		t.Fatalf("occurrences = %v, want %s", occurrences, dueLocal)
 	}
-	wantNext := dueUTC.Add(24 * time.Hour)
+	wantNext := dueLocal.Add(24 * time.Hour)
 	if !next.Equal(wantNext) {
 		t.Fatalf("next = %s, want %s", next, wantNext)
 	}
@@ -135,7 +135,7 @@ func testDefinition(next time.Time, policy model.MisfirePolicy) *model.TimerDefi
 		CronExpr:      "0 * * * * *",
 		Status:        model.TimerStatusActive,
 		NextFireAt:    &next,
-		Timezone:      "UTC",
+		Timezone:      "Local",
 		MisfirePolicy: policy,
 		MaxCatchUp:    10,
 		Version:       1,

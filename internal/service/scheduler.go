@@ -8,9 +8,9 @@ import (
 	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/model"
 	"github.com/chronoflow/internal/pkg/cron"
+	"github.com/chronoflow/internal/pkg/logger"
 	"github.com/chronoflow/internal/pkg/metrics"
 	"github.com/chronoflow/internal/repository"
-	"github.com/chronoflow/pkg/logger"
 	"go.uber.org/zap"
 )
 
@@ -40,7 +40,7 @@ func NewScheduler(
 }
 
 func (s *Scheduler) Start(ctx context.Context) {
-	logger.Info("Scheduler 启动",
+	logger.Info("Scheduler started",
 		zap.Int("poll_interval_ms", s.cfg.PollIntervalMS),
 		zap.Int("batch_size", s.cfg.BatchSize),
 	)
@@ -51,7 +51,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("Scheduler 停止")
+			logger.Info("Scheduler stopped")
 			return
 		case <-ticker.C:
 			s.schedule(ctx)
@@ -61,10 +61,10 @@ func (s *Scheduler) Start(ctx context.Context) {
 
 func (s *Scheduler) schedule(ctx context.Context) {
 	start := time.Now()
-	now := s.now().UTC()
+	now := s.now()
 	result, err := s.repo.ScheduleDueBatch(ctx, now, s.cfg.BatchSize, s.resolveTimer)
 	if err != nil {
-		logger.Error("Scheduler 调度批次失败", zap.Error(err))
+		logger.Error("Scheduler batch failed", zap.Error(err))
 		s.reporter.ReportSchedulerBatch(0, 0, 0, time.Since(start), false)
 		return
 	}
@@ -76,7 +76,7 @@ func (s *Scheduler) schedule(ctx context.Context) {
 		true,
 	)
 	if result.Timers > 0 {
-		logger.Info("Scheduler 调度批次完成",
+		logger.Info("Scheduler batch completed",
 			zap.Int("timers", result.Timers),
 			zap.Int("executions", result.Executions),
 			zap.Int("duplicates", result.Duplicates),
@@ -90,19 +90,19 @@ func (s *Scheduler) resolveTimer(
 	now time.Time,
 ) ([]time.Time, time.Time, error) {
 	if definition.NextFireAt == nil {
-		return nil, time.Time{}, fmt.Errorf("ACTIVE 定时器 next_fire_at 为空")
+		return nil, time.Time{}, fmt.Errorf("ACTIVE timer has an empty next_fire_at")
 	}
 	timezone := definition.Timezone
 	if timezone == "" {
-		timezone = "UTC"
+		timezone = time.Local.String()
 	}
 	location, err := time.LoadLocation(timezone)
 	if err != nil {
-		return nil, time.Time{}, fmt.Errorf("加载时区 %q 失败: %w", timezone, err)
+		return nil, time.Time{}, fmt.Errorf("load timezone %q: %w", timezone, err)
 	}
 
-	current := definition.NextFireAt.UTC().In(location)
-	nowLocal := now.UTC().In(location)
+	current := definition.NextFireAt.In(location)
+	nowLocal := now.In(location)
 	nextAfter := func(from time.Time) (time.Time, error) {
 		next, err := s.parser.NextTriggerTime(definition.CronExpr, from)
 		if err != nil {
@@ -112,7 +112,7 @@ func (s *Scheduler) resolveTimer(
 	}
 
 	grace := time.Duration(s.cfg.MisfireGraceSeconds) * time.Second
-	overdue := now.UTC().Sub(definition.NextFireAt.UTC()) > grace
+	overdue := now.Sub(*definition.NextFireAt) > grace
 	policy := definition.MisfirePolicy
 	if policy == "" {
 		policy = model.MisfirePolicyFireOnce
@@ -123,7 +123,7 @@ func (s *Scheduler) resolveTimer(
 		if err != nil {
 			return nil, time.Time{}, err
 		}
-		return []time.Time{current.UTC()}, next.UTC(), nil
+		return []time.Time{current.Local()}, next.Local(), nil
 	}
 
 	switch policy {
@@ -132,13 +132,13 @@ func (s *Scheduler) resolveTimer(
 		if err != nil {
 			return nil, time.Time{}, err
 		}
-		return nil, next.UTC(), nil
+		return nil, next.Local(), nil
 	case model.MisfirePolicyFireOnce:
 		next, err := nextAfter(nowLocal)
 		if err != nil {
 			return nil, time.Time{}, err
 		}
-		return []time.Time{current.UTC()}, next.UTC(), nil
+		return []time.Time{current.Local()}, next.Local(), nil
 	case model.MisfirePolicyCatchUp:
 		limit := definition.MaxCatchUp
 		if limit < 1 {
@@ -147,14 +147,14 @@ func (s *Scheduler) resolveTimer(
 		occurrences := make([]time.Time, 0, limit)
 		cursor := current
 		for !cursor.After(nowLocal) && len(occurrences) < limit {
-			occurrences = append(occurrences, cursor.UTC())
+			occurrences = append(occurrences, cursor.Local())
 			cursor, err = nextAfter(cursor)
 			if err != nil {
 				return nil, time.Time{}, err
 			}
 		}
-		return occurrences, cursor.UTC(), nil
+		return occurrences, cursor.Local(), nil
 	default:
-		return nil, time.Time{}, fmt.Errorf("未知 misfire 策略: %s", policy)
+		return nil, time.Time{}, fmt.Errorf("unknown misfire policy: %s", policy)
 	}
 }

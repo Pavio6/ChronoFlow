@@ -9,9 +9,9 @@ import (
 
 	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/model"
+	"github.com/chronoflow/internal/pkg/logger"
 	"github.com/chronoflow/internal/pkg/metrics"
 	redisstream "github.com/chronoflow/internal/pkg/redis"
-	"github.com/chronoflow/pkg/logger"
 )
 
 type immediateWorkerPool struct{}
@@ -152,7 +152,7 @@ func newTestStreamWorker(
 		"worker-test",
 	)
 	worker.now = func() time.Time {
-		return time.Date(2026, time.August, 7, 10, 0, 0, 0, time.UTC)
+		return time.Date(2026, time.August, 7, 10, 0, 0, 0, time.Local)
 	}
 	return worker
 }

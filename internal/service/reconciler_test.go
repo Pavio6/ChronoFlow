@@ -105,7 +105,7 @@ func TestReconcilerRunsRecoveryAndCleanup(t *testing.T) {
 		},
 	)
 	reconciler.now = func() time.Time {
-		return time.Date(2026, time.August, 7, 10, 0, 0, 0, time.UTC)
+		return time.Date(2026, time.August, 7, 10, 0, 0, 0, time.Local)
 	}
 
 	reconciler.reconcile(context.Background())

@@ -55,20 +55,20 @@ func (r *outboxRepo) ClaimBatch(
 		if err := tx.
 			Clauses(clause.Locking{Strength: "UPDATE", Options: "SKIP LOCKED"}).
 			Where("published_at IS NULL").
-			Where("available_at <= ?", now.UTC()).
-			Where("(next_attempt_at IS NULL OR next_attempt_at <= ?)", now.UTC()).
-			Where("(claim_until IS NULL OR claim_until < ? OR claim_owner = '')", now.UTC()).
+			Where("available_at <= ?", now).
+			Where("(next_attempt_at IS NULL OR next_attempt_at <= ?)", now).
+			Where("(claim_until IS NULL OR claim_until < ? OR claim_owner = '')", now).
 			Order("id ASC").
 			Limit(limit).
 			Find(&events).Error; err != nil {
-			return fmt.Errorf("领取 Outbox 事件失败: %w", err)
+			return fmt.Errorf("claim outbox events: %w", err)
 		}
 		if len(events) == 0 {
 			return nil
 		}
 
 		ids := make([]int64, 0, len(events))
-		claimUntil := now.UTC().Add(claimTTL)
+		claimUntil := now.Add(claimTTL)
 		for _, event := range events {
 			ids = append(ids, event.ID)
 			event.ClaimOwner = owner
@@ -81,10 +81,10 @@ func (r *outboxRepo) ClaimBatch(
 				"claim_until": claimUntil,
 			})
 		if update.Error != nil {
-			return fmt.Errorf("更新 Outbox 领取状态失败: %w", update.Error)
+			return fmt.Errorf("update outbox claim: %w", update.Error)
 		}
 		if update.RowsAffected != int64(len(ids)) {
-			return fmt.Errorf("Outbox 领取数量不一致: updated=%d, expected=%d", update.RowsAffected, len(ids))
+			return fmt.Errorf("outbox claim count mismatch: updated=%d, expected=%d", update.RowsAffected, len(ids))
 		}
 		return nil
 	})
@@ -105,7 +105,7 @@ func (r *outboxRepo) MarkPublished(
 		Model(&model.OutboxEvent{}).
 		Where("event_id = ? AND claim_owner = ? AND published_at IS NULL", eventID, owner).
 		Updates(map[string]any{
-			"published_at":         publishedAt.UTC(),
+			"published_at":         publishedAt,
 			"published_message_id": messageID,
 			"attempts":             gorm.Expr("attempts + 1"),
 			"claim_owner":          "",
@@ -113,10 +113,10 @@ func (r *outboxRepo) MarkPublished(
 			"last_error":           "",
 		})
 	if result.Error != nil {
-		return fmt.Errorf("标记 Outbox 已发布失败: %w", result.Error)
+		return fmt.Errorf("mark outbox event as published: %w", result.Error)
 	}
 	if result.RowsAffected != 1 {
-		return fmt.Errorf("Outbox 发布确认失去所有权, event_id=%s", eventID)
+		return fmt.Errorf("lost outbox publication ownership, event_id=%s", eventID)
 	}
 	return nil
 }
@@ -133,16 +133,16 @@ func (r *outboxRepo) MarkFailed(
 		Where("event_id = ? AND claim_owner = ? AND published_at IS NULL", eventID, owner).
 		Updates(map[string]any{
 			"attempts":        gorm.Expr("attempts + 1"),
-			"next_attempt_at": nextAttemptAt.UTC(),
+			"next_attempt_at": nextAttemptAt,
 			"claim_owner":     "",
 			"claim_until":     nil,
 			"last_error":      lastError,
 		})
 	if result.Error != nil {
-		return fmt.Errorf("记录 Outbox 发布失败状态失败: %w", result.Error)
+		return fmt.Errorf("record outbox publication failure: %w", result.Error)
 	}
 	if result.RowsAffected != 1 {
-		return fmt.Errorf("Outbox 失败确认失去所有权, event_id=%s", eventID)
+		return fmt.Errorf("lost outbox failure ownership, event_id=%s", eventID)
 	}
 	return nil
 }
@@ -153,7 +153,7 @@ func (r *outboxRepo) CountUnpublished(ctx context.Context) (int64, error) {
 		Model(&model.OutboxEvent{}).
 		Where("published_at IS NULL").
 		Count(&count).Error; err != nil {
-		return 0, fmt.Errorf("统计未发布 Outbox 失败: %w", err)
+		return 0, fmt.Errorf("count unpublished outbox events: %w", err)
 	}
 	return count, nil
 }

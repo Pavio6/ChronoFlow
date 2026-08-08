@@ -55,7 +55,7 @@ func registerOperationalRoutes(
 			"role":         role,
 			"runtime_mode": role.RuntimeMode(),
 			"components":   components,
-			"time":         time.Now().UTC().Format(time.RFC3339),
+			"time":         time.Now().Format(time.RFC3339),
 		})
 	})
 

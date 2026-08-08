@@ -27,7 +27,7 @@ func NewCronParser() *CronParser {
 func (p *CronParser) Parse(expr string) (cron.Schedule, error) {
 	schedule, err := p.parser.Parse(expr)
 	if err != nil {
-		return nil, fmt.Errorf("解析 cron 表达式失败 [%s]: %w", expr, err)
+		return nil, fmt.Errorf("parse cron expression [%s]: %w", expr, err)
 	}
 	return schedule, nil
 }
@@ -40,7 +40,7 @@ func (p *CronParser) NextTriggerTime(expr string, from time.Time) (time.Time, er
 	}
 	next := schedule.Next(from)
 	if next.IsZero() {
-		return time.Time{}, fmt.Errorf("cron 表达式在可计算范围内没有下一次触发时间 [%s]", expr)
+		return time.Time{}, fmt.Errorf("cron expression has no next trigger time within the supported range [%s]", expr)
 	}
 	return next, nil
 }

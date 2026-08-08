@@ -6,9 +6,9 @@ import (
 
 	"github.com/chronoflow/internal/config"
 	"github.com/chronoflow/internal/model"
+	"github.com/chronoflow/internal/pkg/logger"
 	"github.com/chronoflow/internal/pkg/metrics"
 	"github.com/chronoflow/internal/repository"
-	"github.com/chronoflow/pkg/logger"
 	"go.uber.org/zap"
 )
 
@@ -40,7 +40,7 @@ func (r *Reconciler) Start(ctx context.Context) {
 	if !r.cfg.Enabled {
 		return
 	}
-	logger.Info("Execution Reconciler 启动",
+	logger.Info("Execution reconciler started",
 		zap.Int("scan_interval_seconds", r.cfg.ScanIntervalSeconds),
 	)
 	r.reconcile(ctx)
@@ -56,7 +56,7 @@ func (r *Reconciler) Start(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			logger.Info("Execution Reconciler 停止")
+			logger.Info("Execution reconciler stopped")
 			return
 		case <-scanTicker.C:
 			r.reconcile(ctx)
@@ -67,7 +67,7 @@ func (r *Reconciler) Start(ctx context.Context) {
 }
 
 func (r *Reconciler) reconcile(ctx context.Context) {
-	now := r.now().UTC()
+	now := r.now()
 	result, err := r.recoveryRepo.RecoverBatch(
 		ctx,
 		now,
@@ -76,14 +76,14 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 	)
 	if err != nil {
 		r.reporter.ReportRecoveryFailure()
-		logger.Error("Reconciler 恢复扫描失败", zap.Error(err))
+		logger.Error("Reconciler recovery scan failed", zap.Error(err))
 		return
 	}
 	r.reporter.ReportRecoveryAction("reenqueue", result.Reenqueued)
 	r.reporter.ReportRecoveryAction("expired_lease", result.ExpiredLeases)
 	r.reporter.ReportRecoveryAction("terminal_failure", result.FinalFailures)
 	if result.Reenqueued > 0 || result.ExpiredLeases > 0 {
-		logger.Warn("Reconciler 修复执行状态",
+		logger.Warn("Reconciler repaired execution state",
 			zap.Int("reenqueued", result.Reenqueued),
 			zap.Int("expired_leases", result.ExpiredLeases),
 			zap.Int("final_failures", result.FinalFailures),
@@ -93,7 +93,7 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 }
 
 func (r *Reconciler) cleanup(ctx context.Context) {
-	now := r.now().UTC()
+	now := r.now()
 	result, err := r.recoveryRepo.Cleanup(
 		ctx,
 		now.Add(-time.Duration(r.cfg.OutboxRetentionDays)*24*time.Hour),
@@ -102,7 +102,7 @@ func (r *Reconciler) cleanup(ctx context.Context) {
 	)
 	if err != nil {
 		r.reporter.ReportRecoveryFailure()
-		logger.Error("Reconciler 历史数据清理失败", zap.Error(err))
+		logger.Error("Reconciler history cleanup failed", zap.Error(err))
 		return
 	}
 	r.reporter.ReportRecoveryAction(
@@ -186,13 +186,13 @@ func (c *StreamRetentionCleaner) cleanup(ctx context.Context) {
 		ctx,
 		c.outbox.Stream,
 		c.outbox.ConsumerGroup,
-		c.now().UTC().Add(
+		c.now().Add(
 			-time.Duration(c.recovery.StreamRetentionHours)*time.Hour,
 		),
 	)
 	if err != nil {
 		c.reporter.ReportRecoveryFailure()
-		logger.Error("清理 Redis Stream 历史失败", zap.Error(err))
+		logger.Error("Failed to clean Redis Stream history", zap.Error(err))
 		return
 	}
 	c.reporter.ReportRecoveryAction("cleanup", int(trimmed))

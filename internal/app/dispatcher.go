@@ -39,7 +39,7 @@ func (a *Application) configureDispatcher(reporter *metrics.Reporter, publisher 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	if err := publisher.EnsureConsumerGroup(ctx, a.cfg.Outbox.Stream, a.cfg.Outbox.ConsumerGroup); err != nil {
-		return fmt.Errorf("初始化 Redis Stream Consumer Group 失败: %w", err)
+		return fmt.Errorf("initialize Redis Stream consumer group: %w", err)
 	}
 
 	dispatcher := service.NewOutboxDispatcher(
