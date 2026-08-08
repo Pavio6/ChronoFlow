@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/chronoflow/internal/config"
-	"github.com/chronoflow/internal/model"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -69,25 +68,6 @@ func databaseLogLevel(value string) gormlogger.LogLevel {
 	default:
 		return gormlogger.Warn
 	}
-}
-
-// AutoMigrate 自动迁移数据库表结构
-// 根据模型定义自动创建或更新表结构
-func AutoMigrate() error {
-	if DB == nil {
-		return fmt.Errorf("数据库未初始化，请先调用 InitDatabase")
-	}
-
-	err := DB.AutoMigrate(
-		&model.TimerDefinition{},
-		&model.TimerExecution{},
-		&model.OutboxEvent{},
-	)
-	if err != nil {
-		return fmt.Errorf("自动迁移数据库表结构失败: %w", err)
-	}
-
-	return nil
 }
 
 // CloseDatabase 关闭数据库连接

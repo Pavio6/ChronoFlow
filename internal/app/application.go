@@ -11,14 +11,8 @@ import (
 	"time"
 
 	"github.com/chronoflow/internal/config"
-	"github.com/chronoflow/internal/pkg/cron"
-	"github.com/chronoflow/internal/pkg/metrics"
-	"github.com/chronoflow/internal/pkg/pool"
-	redisstream "github.com/chronoflow/internal/pkg/redis"
 	"github.com/chronoflow/internal/repository"
-	"github.com/chronoflow/internal/service"
 	"github.com/chronoflow/pkg/logger"
-	goredis "github.com/redis/go-redis/v9"
 	"go.uber.org/zap"
 )
 
@@ -27,230 +21,52 @@ type backgroundService struct {
 	run  func(context.Context)
 }
 
-// Application owns the process-local resources and lifecycle for one role.
+// Application owns the lifecycle and only the resources of one deployable role.
 type Application struct {
-	cfg         *config.Config
-	role        Role
-	server      *http.Server
-	sqlDB       *sql.DB
-	redisClient *goredis.Client
-	pools       []*pool.GoWorkerPool
-	background  []backgroundService
-	closeOnce   sync.Once
+	cfg        *config.Config
+	role       Role
+	server     *http.Server
+	sqlDB      *sql.DB
+	background []backgroundService
+	closers    []func(context.Context)
+	closeOnce  sync.Once
 }
 
-// New constructs the resources needed by a single process role.
-func New(cfg *config.Config, role Role) (*Application, error) {
+func newApplication(cfg *config.Config, role Role) (*Application, error) {
 	if cfg == nil {
 		return nil, errors.New("config is required")
 	}
-	if !role.IsValid() {
-		return nil, fmt.Errorf("invalid role %q", role)
-	}
 
-	application := &Application{
-		cfg:  cfg,
-		role: role,
-	}
-	cleanupOnError := func(err error) (*Application, error) {
-		cleanupCtx, cancel := context.WithTimeout(
-			context.Background(),
-			time.Duration(cfg.Runtime.ShutdownTimeoutSeconds)*time.Second,
-		)
-		defer cancel()
-		application.closeWithContext(cleanupCtx)
-		return nil, err
-	}
-
+	application := &Application{cfg: cfg, role: role}
 	if err := repository.InitDatabase(&cfg.Database); err != nil {
-		return cleanupOnError(fmt.Errorf("初始化数据库失败: %w", err))
+		return application.fail(fmt.Errorf("初始化数据库失败: %w", err))
 	}
 	sqlDB, err := repository.DB.DB()
 	if err != nil {
-		return cleanupOnError(fmt.Errorf("获取数据库连接失败: %w", err))
+		return application.fail(fmt.Errorf("获取数据库连接失败: %w", err))
 	}
 	application.sqlDB = sqlDB
-
-	// AutoMigrate is an explicit local-development option. Production runs
-	// migrations as a single release job before any role starts.
-	if role.RunsAPI() && cfg.Database.AutoMigrate {
-		if err := repository.AutoMigrate(); err != nil {
-			return cleanupOnError(fmt.Errorf("数据库表迁移失败: %w", err))
-		}
-	}
-
-	var (
-		streamPublisher *redisstream.StreamPublisher
-		streamConsumer  *redisstream.StreamConsumer
-	)
-	if roleRequiresRedis(role) {
-		redisClient, err := redisstream.InitRedis(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB)
-		if err != nil {
-			return cleanupOnError(fmt.Errorf("初始化 Redis 失败: %w", err))
-		}
-		application.redisClient = redisClient
-		streamPublisher = redisstream.NewStreamPublisher(redisClient)
-		streamConsumer = redisstream.NewStreamConsumer(redisClient)
-	}
-
-	reporter := metrics.NewReporter()
-	defRepo := repository.NewTimerDefinitionRepository(repository.DB)
-	cronParser := cron.NewCronParser()
-	dueTimerRepo := repository.NewDueTimerRepository(repository.DB)
-	outboxRepo := repository.NewOutboxRepository(repository.DB)
-	executionRepo := repository.NewTimerExecutionRepository(repository.DB)
-	executionQueryRepo := repository.NewExecutionQueryRepository(repository.DB)
-	recoveryRepo := repository.NewRecoveryRepository(repository.DB)
-
-	var apiDeps *apiDependencies
-	if role.RunsAPI() {
-		apiDeps = &apiDependencies{
-			timerService: service.NewTimerService(
-				defRepo,
-				cronParser,
-				&cfg.Scheduler,
-				&cfg.Security,
-			),
-			defRepo:       defRepo,
-			executionRepo: executionQueryRepo,
-		}
-	}
-
-	if role == RoleScheduler || role == RoleAll {
-		application.buildScheduler(dueTimerRepo, cronParser, reporter)
-		application.buildReconciler(recoveryRepo, executionRepo, reporter)
-		if role == RoleAll {
-			if err := application.buildOutboxDispatcher(
-				outboxRepo,
-				streamPublisher,
-				reporter,
-			); err != nil {
-				return cleanupOnError(err)
-			}
-			if err := application.buildStreamWorker(
-				executionRepo,
-				streamPublisher,
-				streamConsumer,
-				reporter,
-			); err != nil {
-				return cleanupOnError(err)
-			}
-		}
-	}
-	if role == RoleDispatcher {
-		if err := application.buildOutboxDispatcher(
-			outboxRepo,
-			streamPublisher,
-			reporter,
-		); err != nil {
-			return cleanupOnError(err)
-		}
-	}
-	if role == RoleWorker {
-		if err := application.buildStreamWorker(
-			executionRepo,
-			streamPublisher,
-			streamConsumer,
-			reporter,
-		); err != nil {
-			return cleanupOnError(err)
-		}
-	}
-
-	httpHandler, err := newHTTPHandler(
-		cfg,
-		role,
-		reporter,
-		application.checkReadiness,
-		apiDeps,
-	)
-	if err != nil {
-		return cleanupOnError(fmt.Errorf("初始化 HTTP 路由失败: %w", err))
-	}
-	application.server = &http.Server{
-		Addr:              fmt.Sprintf(":%d", cfg.Server.Port),
-		Handler:           httpHandler,
-		ReadHeaderTimeout: 5 * time.Second,
-	}
-
 	return application, nil
 }
 
-func roleRequiresRedis(role Role) bool {
-	return role == RoleDispatcher || role == RoleWorker || role == RoleAll
-}
-
-func (a *Application) buildScheduler(
-	repo repository.DueTimerRepository,
-	cronParser *cron.CronParser,
-	reporter *metrics.Reporter,
-) {
-	scheduler := service.NewScheduler(repo, cronParser, reporter, &a.cfg.Scheduler)
-	a.background = append(a.background, backgroundService{
-		name: "scheduler",
-		run:  scheduler.Start,
-	})
-}
-
-func (a *Application) buildReconciler(
-	recoveryRepo repository.RecoveryRepository,
-	executionRepo repository.TimerExecutionRepository,
-	reporter *metrics.Reporter,
-) {
-	reconciler := service.NewReconciler(
-		recoveryRepo,
-		executionRepo,
-		reporter,
-		&a.cfg.Recovery,
-	)
-	a.background = append(a.background, backgroundService{
-		name: "execution-reconciler",
-		run:  reconciler.Start,
-	})
-}
-
-func (a *Application) buildStreamWorker(
-	executionRepo repository.TimerExecutionRepository,
-	streamPublisher *redisstream.StreamPublisher,
-	streamConsumer *redisstream.StreamConsumer,
-	reporter *metrics.Reporter,
-) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+func (a *Application) fail(err error) (*Application, error) {
+	shutdownTimeout := time.Duration(a.cfg.Runtime.ShutdownTimeoutSeconds) * time.Second
+	ctx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	if err := streamPublisher.EnsureConsumerGroup(
-		ctx,
-		a.cfg.Outbox.Stream,
-		a.cfg.Outbox.ConsumerGroup,
-	); err != nil {
-		return err
-	}
-	workerPool, err := pool.NewGoWorkerPool(a.cfg.Worker.PoolSize)
-	if err != nil {
-		return fmt.Errorf("创建 Worker ants Pool 失败: %w", err)
-	}
-	a.pools = append(a.pools, workerPool)
+	a.closeWithContext(ctx)
+	return nil, err
+}
 
-	worker := service.NewStreamWorker(
-		executionRepo,
-		streamConsumer,
-		workerPool,
-		service.NewConfiguredCallbackClient(&a.cfg.Worker, &a.cfg.Security),
-		reporter,
-		&a.cfg.Worker,
-		&a.cfg.Outbox,
-		a.instanceID(),
-	)
-	cleaner := service.NewStreamRetentionCleaner(
-		streamConsumer,
-		reporter,
-		&a.cfg.Outbox,
-		&a.cfg.Recovery,
-	)
-	a.background = append(a.background,
-		backgroundService{name: "stream-worker", run: worker.Start},
-		backgroundService{name: "stream-retention-cleaner", run: cleaner.Start},
-	)
-	return nil
+func (a *Application) setHTTPServer(handler http.Handler) {
+	a.server = &http.Server{
+		Addr:              fmt.Sprintf(":%d", a.cfg.Server.Port),
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+	}
+}
+
+func (a *Application) addCloser(closer func(context.Context)) {
+	a.closers = append(a.closers, closer)
 }
 
 func (a *Application) instanceID() string {
@@ -261,38 +77,12 @@ func (a *Application) instanceID() string {
 	return fmt.Sprintf("%s-%s-%d", a.role, hostname, os.Getpid())
 }
 
-func (a *Application) buildOutboxDispatcher(
-	repo repository.OutboxRepository,
-	streamPublisher *redisstream.StreamPublisher,
-	reporter *metrics.Reporter,
-) error {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := streamPublisher.EnsureConsumerGroup(
-		ctx,
-		a.cfg.Outbox.Stream,
-		a.cfg.Outbox.ConsumerGroup,
-	); err != nil {
-		return err
+// Run starts one independently deployable role and blocks until it stops.
+func (a *Application) Run(ctx context.Context) error {
+	if a.server == nil {
+		return errors.New("HTTP server is not configured")
 	}
 
-	dispatcher := service.NewOutboxDispatcher(
-		repo,
-		streamPublisher,
-		reporter,
-		&a.cfg.Outbox,
-		a.instanceID(),
-	)
-	a.background = append(a.background, backgroundService{
-		name: "outbox-dispatcher",
-		run:  dispatcher.Start,
-	})
-	return nil
-}
-
-// Run starts the role and blocks until the context is cancelled or the HTTP
-// listener fails.
-func (a *Application) Run(ctx context.Context) error {
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -331,9 +121,7 @@ func (a *Application) Run(ctx context.Context) error {
 	var runErr error
 	select {
 	case <-ctx.Done():
-		logger.Info("收到关闭信号，开始优雅关闭",
-			zap.String("role", string(a.role)),
-		)
+		logger.Info("收到关闭信号，开始优雅关闭", zap.String("role", string(a.role)))
 	case err := <-serverErr:
 		if err != nil {
 			runErr = fmt.Errorf("HTTP 服务器运行失败: %w", err)
@@ -367,20 +155,7 @@ func (a *Application) Run(ctx context.Context) error {
 	return runErr
 }
 
-func (a *Application) checkReadiness(ctx context.Context) map[string]string {
-	failures := make(map[string]string)
-	if err := a.sqlDB.PingContext(ctx); err != nil {
-		failures["mysql"] = err.Error()
-	}
-	if a.redisClient != nil {
-		if err := a.redisClient.Ping(ctx).Err(); err != nil {
-			failures["redis"] = err.Error()
-		}
-	}
-	return failures
-}
-
-// Close releases process-local pools and external connections.
+// Close releases process-local resources for the role.
 func (a *Application) Close() {
 	timeout := time.Duration(a.cfg.Runtime.ShutdownTimeoutSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
@@ -390,15 +165,8 @@ func (a *Application) Close() {
 
 func (a *Application) closeWithContext(ctx context.Context) {
 	a.closeOnce.Do(func() {
-		for _, workerPool := range a.pools {
-			if err := workerPool.ReleaseContext(ctx); err != nil {
-				logger.Warn("协程池未在超时时间内停止", zap.Error(err))
-			}
-		}
-		if a.redisClient != nil {
-			if err := a.redisClient.Close(); err != nil {
-				logger.Warn("关闭 Redis 连接失败", zap.Error(err))
-			}
+		for index := len(a.closers) - 1; index >= 0; index-- {
+			a.closers[index](ctx)
 		}
 		repository.CloseDatabase()
 	})

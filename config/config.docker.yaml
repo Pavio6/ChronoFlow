@@ -7,11 +7,13 @@ runtime:
 
 database:
   dsn: "root:123456@tcp(mysql:3306)/chronoflow?charset=utf8mb4&parseTime=True&loc=UTC"
-  auto_migrate: false
   max_open_conns: 100
   max_idle_conns: 10
   conn_max_lifetime: 60
   log_level: warn
+
+migrations:
+  path: "migrations"
 
 redis:
   addr: "redis:6379"

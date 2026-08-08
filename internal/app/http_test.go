@@ -14,7 +14,7 @@ import (
 func TestOperationalHealthIncludesRole(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	for _, role := range validRoles {
+	for _, role := range allRoles {
 		t.Run(string(role), func(t *testing.T) {
 			router := gin.New()
 			registerOperationalRoutes(

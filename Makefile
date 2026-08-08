@@ -1,4 +1,4 @@
-.PHONY: dev-start dev-app dev-api dev-scheduler dev-dispatcher dev-worker dev-frontend clean docker-down docker-logs build-frontend build-backend build test test-callback
+.PHONY: dev-start dev-app dev-api dev-scheduler dev-dispatcher dev-worker dev-frontend migrate-up migrate-version migrate-down clean docker-down docker-logs build-frontend build-backend build test test-callback
 
 # 启动 Docker 基础依赖与可观测性栈；后端使用 make dev-app 单独启动
 dev-start:
@@ -14,20 +14,30 @@ dev-start:
 
 # 启动后端服务
 dev-app:
-	go run ./cmd/chronoflow all
+	go run ./cmd/all
 
 # 独立角色启动入口；同一主机并行运行时需要为每个角色配置不同的 server.port
 dev-api:
-	CHRONOFLOW_SERVER_PORT=8080 go run ./cmd/chronoflow api
+	CHRONOFLOW_SERVER_PORT=8080 go run ./cmd/api
 
 dev-scheduler:
-	CHRONOFLOW_SERVER_PORT=8081 go run ./cmd/chronoflow scheduler
+	CHRONOFLOW_SERVER_PORT=8081 go run ./cmd/scheduler
 
 dev-dispatcher:
-	CHRONOFLOW_SERVER_PORT=8082 go run ./cmd/chronoflow dispatcher
+	CHRONOFLOW_SERVER_PORT=8082 go run ./cmd/dispatcher
 
 dev-worker:
-	CHRONOFLOW_SERVER_PORT=8083 go run ./cmd/chronoflow worker
+	CHRONOFLOW_SERVER_PORT=8083 go run ./cmd/worker
+
+migrate-up:
+	go run ./cmd/migrate up
+
+migrate-version:
+	go run ./cmd/migrate version
+
+migrate-down:
+	@test -n "$(STEPS)" || (echo "Usage: make migrate-down STEPS=1" && exit 2)
+	go run ./cmd/migrate down $(STEPS)
 
 # 启动前端开发服务器
 dev-frontend:
@@ -52,7 +62,12 @@ build-frontend:
 # 构建后端
 build-backend:
 	mkdir -p bin
-	go build -o bin/chronoflow ./cmd/chronoflow
+	go build -o bin/chronoflow-api ./cmd/api
+	go build -o bin/chronoflow-scheduler ./cmd/scheduler
+	go build -o bin/chronoflow-dispatcher ./cmd/dispatcher
+	go build -o bin/chronoflow-worker ./cmd/worker
+	go build -o bin/chronoflow-migrate ./cmd/migrate
+	go build -o bin/chronoflow-all ./cmd/all
 
 # 构建前端和后端
 build: build-frontend build-backend

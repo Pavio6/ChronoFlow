@@ -12,6 +12,7 @@ type Config struct {
 	Server     ServerConfig     `mapstructure:"server"`
 	Runtime    RuntimeConfig    `mapstructure:"runtime"`
 	Database   DatabaseConfig   `mapstructure:"database"`
+	Migrations MigrationConfig  `mapstructure:"migrations"`
 	Redis      RedisConfig      `mapstructure:"redis"`
 	Scheduler  SchedulerConfig  `mapstructure:"scheduler"`
 	Outbox     OutboxConfig     `mapstructure:"outbox"`
@@ -36,11 +37,15 @@ type RuntimeConfig struct {
 // DatabaseConfig 数据库配置
 type DatabaseConfig struct {
 	DSN             string `mapstructure:"dsn"`
-	AutoMigrate     bool   `mapstructure:"auto_migrate"`
 	MaxOpenConns    int    `mapstructure:"max_open_conns"`
 	MaxIdleConns    int    `mapstructure:"max_idle_conns"`
 	ConnMaxLifetime int    `mapstructure:"conn_max_lifetime"` // 分钟
 	LogLevel        string `mapstructure:"log_level"`
+}
+
+// MigrationConfig controls the versioned SQL migration source.
+type MigrationConfig struct {
+	Path string `mapstructure:"path"`
 }
 
 // RedisConfig Redis 配置
@@ -152,6 +157,7 @@ func Load(configPath string) (*Config, error) {
 	normalizeSecurityConfig(&cfg.Security)
 	normalizeMonitoringConfig(&cfg.Monitoring)
 	normalizeRuntimeConfig(&cfg.Runtime)
+	normalizeMigrationConfig(&cfg.Migrations)
 	AppConfig = cfg
 	return cfg, nil
 }
@@ -159,6 +165,12 @@ func Load(configPath string) (*Config, error) {
 func normalizeRuntimeConfig(cfg *RuntimeConfig) {
 	if cfg.ShutdownTimeoutSeconds < 1 {
 		cfg.ShutdownTimeoutSeconds = 15
+	}
+}
+
+func normalizeMigrationConfig(cfg *MigrationConfig) {
+	if strings.TrimSpace(cfg.Path) == "" {
+		cfg.Path = "migrations"
 	}
 }
 
@@ -290,11 +302,11 @@ func setDefaults() {
 	viper.SetDefault("runtime.shutdown_timeout_seconds", 15)
 
 	// 数据库默认配置
-	viper.SetDefault("database.auto_migrate", false)
 	viper.SetDefault("database.max_open_conns", 100)
 	viper.SetDefault("database.max_idle_conns", 10)
 	viper.SetDefault("database.conn_max_lifetime", 60)
 	viper.SetDefault("database.log_level", "warn")
+	viper.SetDefault("migrations.path", "migrations")
 
 	// Redis 默认配置
 	viper.SetDefault("redis.addr", "127.0.0.1:6379")

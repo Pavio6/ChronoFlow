@@ -11,13 +11,14 @@ runtime:
 
 database:
   dsn: "root:123456@tcp(127.0.0.1:3306)/chronoflow?charset=utf8mb4&parseTime=True&loc=UTC"
-  # 仅用于本地开发；生产迁移必须由单一发布任务执行
-  auto_migrate: true
   max_open_conns: 100
   max_idle_conns: 10
   conn_max_lifetime: 60  # 分钟
   # 禁止默认记录每条 SQL，避免回调快照和 Header 出现在日志中
   log_level: warn
+
+migrations:
+  path: "migrations"
 
 redis:
   addr: "127.0.0.1:6379"

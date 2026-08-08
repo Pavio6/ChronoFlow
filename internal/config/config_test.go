@@ -23,8 +23,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Runtime.ShutdownTimeoutSeconds != 15 {
 		t.Fatalf("runtime shutdown timeout = %d, want 15", cfg.Runtime.ShutdownTimeoutSeconds)
 	}
-	if cfg.Database.AutoMigrate {
-		t.Fatal("database auto_migrate must be disabled by default")
+	if cfg.Migrations.Path != "migrations" {
+		t.Fatalf("migration path = %q, want migrations", cfg.Migrations.Path)
 	}
 	if cfg.Scheduler.BatchSize != 100 ||
 		cfg.Scheduler.PollIntervalMS != 500 {
