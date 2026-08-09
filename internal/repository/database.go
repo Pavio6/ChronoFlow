@@ -36,13 +36,13 @@ func InitDatabase(cfg *config.DatabaseConfig) error {
 		DisableForeignKeyConstraintWhenMigrating: true,
 	})
 	if err != nil {
-		return fmt.Errorf("打开数据库连接失败: %w", err)
+		return fmt.Errorf("open database connection: %w", err)
 	}
 
 	// 获取底层的 *sql.DB 对象，用于配置连接池
 	sqlDB, err := DB.DB()
 	if err != nil {
-		return fmt.Errorf("获取数据库实例失败: %w", err)
+		return fmt.Errorf("get database instance: %w", err)
 	}
 
 	// 设置最大打开连接数
@@ -57,6 +57,7 @@ func InitDatabase(cfg *config.DatabaseConfig) error {
 	return nil
 }
 
+// databaseLogLevel 将配置字符串转换为 GORM 日志级别。
 func databaseLogLevel(value string) gormlogger.LogLevel {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "silent":

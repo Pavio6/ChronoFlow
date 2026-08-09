@@ -10,7 +10,7 @@ import (
 	"github.com/chronoflow/internal/service"
 )
 
-// NewAPI constructs only the API/control-plane process.
+// NewAPI 创建只承载控制面的 API 进程。
 func NewAPI(cfg *config.Config) (*Application, error) {
 	application, err := newApplication(cfg, RoleAPI)
 	if err != nil {
@@ -22,10 +22,12 @@ func NewAPI(cfg *config.Config) (*Application, error) {
 	return application, nil
 }
 
+// configureAPI 配置 API 角色所需的 HTTP 服务。
 func (a *Application) configureAPI(reporter *metrics.Reporter) error {
 	return a.configureAPIHTTP(reporter, a.checkMySQLReadiness)
 }
 
+// configureAPIHTTP 创建 API 路由及其依赖。
 func (a *Application) configureAPIHTTP(reporter *metrics.Reporter, checkReady readinessChecker) error {
 	definitionRepo := repository.NewTimerDefinitionRepository(repository.DB)
 	apiDeps := &apiDependencies{
@@ -46,7 +48,7 @@ func (a *Application) configureAPIHTTP(reporter *metrics.Reporter, checkReady re
 		apiDeps,
 	)
 	if err != nil {
-		return fmt.Errorf("初始化 API HTTP 路由失败: %w", err)
+		return fmt.Errorf("initialize API HTTP routes: %w", err)
 	}
 	a.setHTTPServer(handler)
 	return nil

@@ -21,6 +21,7 @@ type Client struct {
 	allowPrivate    bool
 }
 
+// NewClient 创建带回调安全校验和响应体限制的 HTTP 客户端。
 func NewClient(
 	timeout time.Duration,
 	maxResponseBody int64,
@@ -36,19 +37,19 @@ func NewClient(
 		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
 			host, port, err := net.SplitHostPort(address)
 			if err != nil {
-				return nil, fmt.Errorf("解析回调地址失败: %w", err)
+				return nil, fmt.Errorf("parse callback address: %w", err)
 			}
 			addresses, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
 			if err != nil {
-				return nil, fmt.Errorf("解析回调域名失败: %w", err)
+				return nil, fmt.Errorf("resolve callback hostname: %w", err)
 			}
 			for _, address := range addresses {
 				if !allowPrivate && isPrivateAddress(address) {
-					return nil, fmt.Errorf("回调域名解析到禁止的私有地址: %s", address)
+					return nil, fmt.Errorf("callback hostname resolves to a disallowed private address: %s", address)
 				}
 			}
 			if len(addresses) == 0 {
-				return nil, fmt.Errorf("回调域名没有可用地址")
+				return nil, fmt.Errorf("callback hostname has no usable addresses")
 			}
 			return dialer.DialContext(
 				ctx,
@@ -66,7 +67,7 @@ func NewClient(
 		Transport: transport,
 		CheckRedirect: func(request *http.Request, via []*http.Request) error {
 			if len(via) >= 5 {
-				return fmt.Errorf("回调重定向次数超过上限")
+				return fmt.Errorf("callback redirect limit exceeded")
 			}
 			return ValidateURL(request.URL.String(), allowPrivate)
 		},
@@ -74,31 +75,33 @@ func NewClient(
 	return client
 }
 
+// ValidateURL 校验回调地址的协议、主机和私网访问限制。
 func ValidateURL(rawURL string, allowPrivate bool) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
-		return fmt.Errorf("回调 URL 无效: %w", err)
+		return fmt.Errorf("invalid callback URL: %w", err)
 	}
 	if parsed.Scheme != "http" && parsed.Scheme != "https" {
-		return fmt.Errorf("回调 URL 只允许 http 或 https")
+		return fmt.Errorf("callback URL scheme must be http or https")
 	}
 	if parsed.Hostname() == "" {
-		return fmt.Errorf("回调 URL 缺少主机名")
+		return fmt.Errorf("callback URL host is required")
 	}
 	if parsed.User != nil {
-		return fmt.Errorf("回调 URL 不允许包含用户凭据")
+		return fmt.Errorf("callback URL must not include user credentials")
 	}
 	if !allowPrivate {
 		if address := net.ParseIP(parsed.Hostname()); address != nil && isPrivateAddress(address) {
-			return fmt.Errorf("回调 URL 不允许访问私有或本机地址")
+			return fmt.Errorf("callback URL must not target a private or loopback address")
 		}
 		if strings.EqualFold(parsed.Hostname(), "localhost") {
-			return fmt.Errorf("回调 URL 不允许访问 localhost")
+			return fmt.Errorf("callback URL must not target localhost")
 		}
 	}
 	return nil
 }
 
+// Execute 使用固定的请求快照执行回调，并返回状态码和响应体。
 func (c *Client) Execute(
 	ctx context.Context,
 	snapshot *model.CallbackSnapshot,
@@ -113,7 +116,7 @@ func (c *Client) Execute(
 	}
 	request, err := http.NewRequestWithContext(ctx, snapshot.Method, snapshot.URL, body)
 	if err != nil {
-		return 0, "", fmt.Errorf("创建回调请求失败: %w", err)
+		return 0, "", fmt.Errorf("create callback request: %w", err)
 	}
 	request.Header.Set("Content-Type", "application/json")
 	request.Header.Set("User-Agent", "ChronoFlow/1.0")
@@ -129,28 +132,29 @@ func (c *Client) Execute(
 
 	response, err := c.httpClient.Do(request)
 	if err != nil {
-		return 0, "", fmt.Errorf("执行 HTTP 回调失败: %w", err)
+		return 0, "", fmt.Errorf("execute HTTP callback: %w", err)
 	}
 	defer response.Body.Close()
 
 	limited := io.LimitReader(response.Body, c.maxResponseBody+1)
 	bodyBytes, err := io.ReadAll(limited)
 	if err != nil {
-		return response.StatusCode, "", fmt.Errorf("读取回调响应失败: %w", err)
+		return response.StatusCode, "", fmt.Errorf("read callback response: %w", err)
 	}
 	if int64(len(bodyBytes)) > c.maxResponseBody {
 		bodyBytes = bodyBytes[:c.maxResponseBody]
-		return response.StatusCode, string(bodyBytes), fmt.Errorf("回调响应体超过 %d 字节上限", c.maxResponseBody)
+		return response.StatusCode, string(bodyBytes), fmt.Errorf("callback response exceeds maximum size of %d bytes", c.maxResponseBody)
 	}
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
 		return response.StatusCode, string(bodyBytes), fmt.Errorf(
-			"HTTP 回调返回非 2xx 状态码: %d",
+			"HTTP callback returned a non-2xx status code: %d",
 			response.StatusCode,
 		)
 	}
 	return response.StatusCode, string(bodyBytes), nil
 }
 
+// isReservedHeader 判断请求头是否由系统保留且不允许回调配置覆盖。
 func isReservedHeader(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "host", "content-length", "connection", "transfer-encoding",
@@ -161,11 +165,18 @@ func isReservedHeader(name string) bool {
 	}
 }
 
+// isPrivateAddress 判断 IP 是否属于不应默认访问的私有或特殊地址。
 func isPrivateAddress(address net.IP) bool {
+	// 回环地址，例如 127.0.0.1、::1，只指向当前机器。
 	return address.IsLoopback() ||
+		// 私有网络地址，例如 10.0.0.0/8、172.16.0.0/12、192.168.0.0/16。
 		address.IsPrivate() ||
+		// 单播链路本地地址，例如 IPv4 的 169.254.0.0/16，只在当前二层网络有效。
 		address.IsLinkLocalUnicast() ||
+		// 组播链路本地地址，只能在当前网络链路内传播。
 		address.IsLinkLocalMulticast() ||
+		// 未指定地址，例如 0.0.0.0、::，不能作为实际远程目标。
 		address.IsUnspecified() ||
+		// 组播地址，用于向一组主机发送数据，不是单个 HTTP 回调目标。
 		address.IsMulticast()
 }

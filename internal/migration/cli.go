@@ -8,7 +8,7 @@ import (
 	"github.com/chronoflow/internal/config"
 )
 
-// RunCLI executes the release-time migration command using project config.
+// RunCLI 使用项目配置执行发布阶段的迁移命令。
 func RunCLI(args []string, output io.Writer) error {
 	command, err := ParseCommand(args)
 	if errors.Is(err, ErrHelp) {
@@ -21,7 +21,7 @@ func RunCLI(args []string, output io.Writer) error {
 
 	cfg, err := config.Load("./config")
 	if err != nil {
-		return fmt.Errorf("加载配置失败: %w", err)
+		return fmt.Errorf("load configuration: %w", err)
 	}
 	result, err := Execute(cfg.Database.DSN, cfg.Migrations.Path, command)
 	if err != nil {

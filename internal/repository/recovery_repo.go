@@ -40,10 +40,12 @@ type recoveryRepo struct {
 	db *gorm.DB
 }
 
+// NewRecoveryRepository 创建用于执行恢复和历史清理的仓库。
 func NewRecoveryRepository(db *gorm.DB) RecoveryRepository {
 	return &recoveryRepo{db: db}
 }
 
+// RecoverBatch 恢复超时、停滞或需要重新投递的 Execution。
 func (r *recoveryRepo) RecoverBatch(
 	ctx context.Context,
 	now time.Time,
@@ -84,7 +86,7 @@ func (r *recoveryRepo) RecoverBatch(
 						Updates(map[string]any{
 							"status":        model.ExecutionStatusFailed,
 							"finished_at":   now,
-							"error_message": "Execution Lease 过期且已达到最大尝试次数",
+							"error_message": "execution lease expired after reaching the maximum number of attempts",
 							"lease_owner":   "",
 							"lease_until":   nil,
 							"run_token":     "",
@@ -109,7 +111,7 @@ func (r *recoveryRepo) RecoverBatch(
 						"lease_owner":     "",
 						"lease_until":     nil,
 						"run_token":       "",
-						"error_message":   "Execution Lease 过期，已由 Reconciler 重新投递",
+						"error_message":   "execution lease expired and was re-enqueued by the reconciler",
 					}).Error; err != nil {
 					return err
 				}
@@ -148,6 +150,7 @@ func (r *recoveryRepo) RecoverBatch(
 	return result, nil
 }
 
+// Cleanup 删除超过保留期限的已发布 Outbox 和终态 Execution。
 func (r *recoveryRepo) Cleanup(
 	ctx context.Context,
 	outboxBefore time.Time,

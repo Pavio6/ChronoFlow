@@ -112,7 +112,7 @@ var historyQueries = map[string]string{
 	"abnormal_executions": `sum(chronoflow_executions{status=~"PENDING|RUNNING|RETRY_WAIT"})`,
 }
 
-// GetHistory returns a fixed set of historical series stored by Prometheus.
+// GetHistory 返回由 Prometheus 存储的固定监控历史序列。
 func (h *MonitoringHandler) GetHistory(c *gin.Context) {
 	rangeMinutes, stepSeconds := historyWindow(c.Query("range_minutes"))
 	end := time.Now()
@@ -159,6 +159,7 @@ func (h *MonitoringHandler) GetHistory(c *gin.Context) {
 	})
 }
 
+// historyWindow 根据请求参数返回历史查询范围与采样步长。
 func historyWindow(raw string) (int, int) {
 	switch raw {
 	case "15":
@@ -172,10 +173,11 @@ func historyWindow(raw string) (int, int) {
 	}
 }
 
+// queryRange 查询 Prometheus 区间数据并转换为历史数据点。
 func (h *MonitoringHandler) queryRange(ctx context.Context, query string, start, end time.Time, stepSeconds int) ([]historyPoint, error) {
 	endpoint, err := url.Parse(strings.TrimRight(h.promURL, "/") + "/api/v1/query_range")
 	if err != nil {
-		return nil, fmt.Errorf("Prometheus 地址无效: %w", err)
+		return nil, fmt.Errorf("invalid Prometheus URL: %w", err)
 	}
 	params := endpoint.Query()
 	params.Set("query", query)
@@ -186,23 +188,23 @@ func (h *MonitoringHandler) queryRange(ctx context.Context, query string, start,
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
 	if err != nil {
-		return nil, fmt.Errorf("创建 Prometheus 查询失败: %w", err)
+		return nil, fmt.Errorf("create Prometheus query: %w", err)
 	}
 	resp, err := h.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("查询 Prometheus 历史指标失败: %w", err)
+		return nil, fmt.Errorf("query Prometheus history: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("查询 Prometheus 历史指标返回状态 %d", resp.StatusCode)
+		return nil, fmt.Errorf("Prometheus history returned status %d", resp.StatusCode)
 	}
 
 	var result prometheusRangeResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("解析 Prometheus 历史指标失败: %w", err)
+		return nil, fmt.Errorf("decode Prometheus history: %w", err)
 	}
 	if result.Status != "success" {
-		return nil, fmt.Errorf("Prometheus 查询失败: %s", result.Error)
+		return nil, fmt.Errorf("Prometheus query failed: %s", result.Error)
 	}
 	if len(result.Data.Result) == 0 {
 		return []historyPoint{}, nil
@@ -230,6 +232,7 @@ func (h *MonitoringHandler) queryRange(ctx context.Context, query string, start,
 	return points, nil
 }
 
+// sumTimerStats 汇总各 Timer 状态的数量。
 func sumTimerStats(stats map[model.TimerStatus]int64) int64 {
 	var total int64
 	for _, count := range stats {
@@ -238,6 +241,7 @@ func sumTimerStats(stats map[model.TimerStatus]int64) int64 {
 	return total
 }
 
+// sumExecutionStats 汇总各 Execution 状态的数量。
 func sumExecutionStats(stats map[model.ExecutionStatus]int64) int64 {
 	var total int64
 	for _, count := range stats {

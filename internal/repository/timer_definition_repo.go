@@ -21,7 +21,7 @@ type TimerDefinitionRepository interface {
 	List(req *model.TimerDefinitionListRequest) ([]*model.TimerDefinition, int64, error)
 	// CountListByStatus 按列表筛选条件统计可见定时器状态
 	CountListByStatus(req *model.TimerDefinitionListRequest) (map[model.TimerStatus]int64, error)
-	// UpdateScheduleState conditionally changes status and next_fire_at.
+	// UpdateScheduleState 有条件地更新状态和 next_fire_at。
 	UpdateScheduleState(id int64, from, to model.TimerStatus, nextFireAt *time.Time) error
 	// CountByStatus 按定时器状态统计数量
 	CountByStatus() (map[model.TimerStatus]int64, error)
@@ -40,7 +40,7 @@ func NewTimerDefinitionRepository(db *gorm.DB) TimerDefinitionRepository {
 // Create 创建定时器定义
 func (r *timerDefinitionRepo) Create(def *model.TimerDefinition) error {
 	if err := r.db.Create(def).Error; err != nil {
-		return fmt.Errorf("创建定时器定义失败: %w", err)
+		return fmt.Errorf("create timer definition: %w", err)
 	}
 	return nil
 }
@@ -54,7 +54,7 @@ func (r *timerDefinitionRepo) GetByID(id int64) (*model.TimerDefinition, error) 
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("查询定时器定义失败: %w", err)
+		return nil, fmt.Errorf("get timer definition: %w", err)
 	}
 	return &def, nil
 }
@@ -69,16 +69,15 @@ func (r *timerDefinitionRepo) Delete(id int64) error {
 			"version":      gorm.Expr("version + 1"),
 		})
 	if result.Error != nil {
-		return fmt.Errorf("删除定时器定义失败: %w", result.Error)
+		return fmt.Errorf("delete timer definition: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("定时器定义不存在或已被删除，id=%d", id)
+		return fmt.Errorf("timer definition does not exist or is deleted, id=%d", id)
 	}
 	return nil
 }
 
-// UpdateScheduleState applies a state transition without allowing concurrent
-// activation/deactivation requests to overwrite each other.
+// UpdateScheduleState 更新状态转换，避免并发激活或停用请求相互覆盖。
 func (r *timerDefinitionRepo) UpdateScheduleState(
 	id int64,
 	from model.TimerStatus,
@@ -93,10 +92,10 @@ func (r *timerDefinitionRepo) UpdateScheduleState(
 			"version":      gorm.Expr("version + 1"),
 		})
 	if result.Error != nil {
-		return fmt.Errorf("更新定时器调度状态失败: %w", result.Error)
+		return fmt.Errorf("update timer schedule state: %w", result.Error)
 	}
 	if result.RowsAffected == 0 {
-		return fmt.Errorf("定时器状态已变化或不存在，id=%d, expected=%s", id, from)
+		return fmt.Errorf("timer state changed or timer does not exist, id=%d, expected=%s", id, from)
 	}
 	return nil
 }
@@ -128,7 +127,7 @@ func (r *timerDefinitionRepo) List(req *model.TimerDefinitionListRequest) ([]*mo
 
 	// 统计满足条件的总记录数
 	if err := query.Count(&total).Error; err != nil {
-		return nil, 0, fmt.Errorf("统计定时器定义数量失败: %w", err)
+		return nil, 0, fmt.Errorf("count timer definitions: %w", err)
 	}
 
 	// 计算分页偏移量
@@ -139,7 +138,7 @@ func (r *timerDefinitionRepo) List(req *model.TimerDefinitionListRequest) ([]*mo
 		Offset(offset).
 		Limit(req.PageSize).
 		Find(&items).Error; err != nil {
-		return nil, 0, fmt.Errorf("查询定时器定义列表失败: %w", err)
+		return nil, 0, fmt.Errorf("list timer definitions: %w", err)
 	}
 
 	return items, total, nil
@@ -166,7 +165,7 @@ func (r *timerDefinitionRepo) CountListByStatus(req *model.TimerDefinitionListRe
 
 	var rows []row
 	if err := query.Select("status, count(*) as count").Group("status").Find(&rows).Error; err != nil {
-		return nil, fmt.Errorf("统计定时器列表状态失败: %w", err)
+		return nil, fmt.Errorf("count timer list statuses: %w", err)
 	}
 
 	result := make(map[model.TimerStatus]int64, len(rows))
@@ -188,7 +187,7 @@ func (r *timerDefinitionRepo) CountByStatus() (map[model.TimerStatus]int64, erro
 		Select("status, count(*) as count").
 		Group("status").
 		Find(&rows).Error; err != nil {
-		return nil, fmt.Errorf("统计定时器状态失败: %w", err)
+		return nil, fmt.Errorf("count timer statuses: %w", err)
 	}
 
 	result := make(map[model.TimerStatus]int64, len(rows))

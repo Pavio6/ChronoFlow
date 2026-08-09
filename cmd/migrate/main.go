@@ -9,7 +9,7 @@ import (
 
 func main() {
 	if err := migration.RunCLI(os.Args[1:], os.Stdout); err != nil {
-		fmt.Fprintf(os.Stderr, "ChronoFlow 迁移失败: %v\n", err)
+		fmt.Fprintf(os.Stderr, "ChronoFlow migration failed: %v\n", err)
 		os.Exit(1)
 	}
 }

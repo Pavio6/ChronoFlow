@@ -45,7 +45,7 @@ func (h *TimerHandler) CreateTimer(c *gin.Context) {
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
-			"message": "请求参数无效: " + err.Error(),
+			"message": "invalid request parameters: " + err.Error(),
 		})
 		return
 	}
@@ -61,7 +61,7 @@ func (h *TimerHandler) CreateTimer(c *gin.Context) {
 
 	c.JSON(http.StatusCreated, gin.H{
 		"code":    http.StatusCreated,
-		"message": "创建成功",
+		"message": "timer created",
 		"data":    def,
 	})
 }
@@ -73,7 +73,7 @@ func (h *TimerHandler) GetTimer(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
-			"message": "无效的 ID",
+			"message": "invalid ID",
 		})
 		return
 	}
@@ -100,7 +100,7 @@ func (h *TimerHandler) DeleteTimer(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
-			"message": "无效的 ID",
+			"message": "invalid ID",
 		})
 		return
 	}
@@ -115,7 +115,7 @@ func (h *TimerHandler) DeleteTimer(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    http.StatusOK,
-		"message": "删除成功",
+		"message": "timer deleted",
 	})
 }
 
@@ -126,7 +126,7 @@ func (h *TimerHandler) ListTimers(c *gin.Context) {
 	if err := c.ShouldBindQuery(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
-			"message": "请求参数无效: " + err.Error(),
+			"message": "invalid request parameters: " + err.Error(),
 		})
 		return
 	}
@@ -153,7 +153,7 @@ func (h *TimerHandler) ActivateTimer(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
-			"message": "无效的 ID",
+			"message": "invalid ID",
 		})
 		return
 	}
@@ -168,7 +168,7 @@ func (h *TimerHandler) ActivateTimer(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    http.StatusOK,
-		"message": "激活成功",
+		"message": "timer activated",
 	})
 }
 
@@ -179,7 +179,7 @@ func (h *TimerHandler) DeactivateTimer(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"code":    http.StatusBadRequest,
-			"message": "无效的 ID",
+			"message": "invalid ID",
 		})
 		return
 	}
@@ -194,7 +194,7 @@ func (h *TimerHandler) DeactivateTimer(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    http.StatusOK,
-		"message": "停用成功",
+		"message": "timer deactivated",
 	})
 }
 

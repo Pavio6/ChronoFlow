@@ -8,8 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// APISecurity enforces an optional deploy-time API key and request size limit.
-// Operational endpoints remain available to orchestrators.
+// APISecurity 对 API 接口执行可选的部署期密钥校验和请求体大小限制，运行状态接口保持可访问。
 func APISecurity(apiKey string, maxRequestBytes int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !strings.HasPrefix(c.Request.URL.Path, "/api/") {
@@ -34,7 +33,7 @@ func APISecurity(apiKey string, maxRequestBytes int64) gin.HandlerFunc {
 		if subtle.ConstantTimeCompare([]byte(provided), []byte(apiKey)) != 1 {
 			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
 				"code":    http.StatusUnauthorized,
-				"message": "未授权",
+				"message": "unauthorized",
 			})
 			return
 		}

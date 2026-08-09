@@ -20,6 +20,7 @@ type apiDependencies struct {
 	executionRepo repository.ExecutionQueryRepository
 }
 
+// newAPIHTTPHandler 创建包含业务接口、监控接口和静态资源的 HTTP 处理器。
 func newAPIHTTPHandler(
 	cfg *config.Config,
 	role Role,
@@ -51,7 +52,7 @@ func newAPIHTTPHandler(
 	router.StaticFile("/", "./web/dist/index.html")
 	router.NoRoute(func(c *gin.Context) {
 		if c.Request.URL.Path == "/api" || strings.HasPrefix(c.Request.URL.Path, "/api/") {
-			c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "接口不存在"})
+			c.JSON(http.StatusNotFound, gin.H{"code": http.StatusNotFound, "message": "API endpoint not found"})
 			return
 		}
 		c.File("./web/dist/index.html")

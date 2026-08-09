@@ -52,8 +52,7 @@ type executionCallback interface {
 	) (int, string, error)
 }
 
-// StreamWorker consumes at-least-once Stream messages and uses the MySQL
-// execution Lease as the authoritative processing claim.
+// StreamWorker 消费至少一次投递的 Stream 消息，并以 MySQL Execution Lease 作为权威领取依据。
 type StreamWorker struct {
 	repo       repository.TimerExecutionRepository
 	stream     workerStream
@@ -66,6 +65,7 @@ type StreamWorker struct {
 	now        func() time.Time
 }
 
+// NewStreamWorker 创建消费 Redis Stream 并执行回调的 Worker。
 func NewStreamWorker(
 	repo repository.TimerExecutionRepository,
 	stream workerStream,
@@ -89,6 +89,7 @@ func NewStreamWorker(
 	}
 }
 
+// NewConfiguredCallbackClient 根据 Worker 与安全配置创建回调 HTTP 客户端。
 func NewConfiguredCallbackClient(
 	workerCfg *config.WorkerConfig,
 	securityCfg *config.SecurityConfig,
@@ -100,6 +101,7 @@ func NewConfiguredCallbackClient(
 	)
 }
 
+// Start 持续读取新消息和超时 Pending 消息，并提交给协程池处理。
 func (w *StreamWorker) Start(ctx context.Context) {
 	logger.Info("Redis Streams worker started",
 		zap.String("consumer", w.consumerID),
@@ -162,6 +164,7 @@ func (w *StreamWorker) Start(ctx context.Context) {
 	}
 }
 
+// submit 将一条 Stream 消息提交给协程池异步处理。
 func (w *StreamWorker) submit(
 	ctx context.Context,
 	message redisstream.StreamMessage,
@@ -177,6 +180,7 @@ func (w *StreamWorker) submit(
 	}
 }
 
+// process 领取 Execution、执行回调并按最终结果确认或安排重试。
 func (w *StreamWorker) process(
 	ctx context.Context,
 	message redisstream.StreamMessage,
@@ -238,7 +242,7 @@ func (w *StreamWorker) process(
 			startedAt,
 			0,
 			"",
-			fmt.Errorf("解析回调快照失败: %w", err),
+			fmt.Errorf("decode callback snapshot: %w", err),
 			false,
 		)
 		return
@@ -316,6 +320,7 @@ func (w *StreamWorker) process(
 	w.ack(finalizeCtx, message)
 }
 
+// heartbeat 在回调进行期间定期续约当前 Execution 的 Lease。
 func (w *StreamWorker) heartbeat(
 	ctx context.Context,
 	executionID int64,
@@ -359,6 +364,7 @@ func (w *StreamWorker) heartbeat(
 	}
 }
 
+// finishFailure 记录回调失败，并在可重试时创建后续投递事件。
 func (w *StreamWorker) finishFailure(
 	message redisstream.StreamMessage,
 	execution *model.TimerExecution,
@@ -401,6 +407,7 @@ func (w *StreamWorker) finishFailure(
 	w.ack(finalizeCtx, message)
 }
 
+// ack 确认一条已完成处理的 Stream 消息。
 func (w *StreamWorker) ack(ctx context.Context, message redisstream.StreamMessage) {
 	if err := w.stream.Ack(
 		ctx,
@@ -416,6 +423,7 @@ func (w *StreamWorker) ack(ctx context.Context, message redisstream.StreamMessag
 	}
 }
 
+// refreshPendingMetric 刷新当前 Consumer Group 的 Pending 消息指标。
 func (w *StreamWorker) refreshPendingMetric(ctx context.Context) {
 	count, err := w.stream.PendingCount(
 		ctx,
@@ -427,6 +435,7 @@ func (w *StreamWorker) refreshPendingMetric(ctx context.Context) {
 	}
 }
 
+// retryBackoff 根据尝试次数计算受上限限制的重试退避时间。
 func (w *StreamWorker) retryBackoff(attempt int) time.Duration {
 	if attempt < 1 {
 		attempt = 1
@@ -442,6 +451,7 @@ func (w *StreamWorker) retryBackoff(attempt int) time.Duration {
 	return time.Duration(seconds) * time.Second
 }
 
+// newRunToken 生成用于拒绝过期执行结果的随机令牌。
 func newRunToken() (string, error) {
 	value := make([]byte, 16)
 	if _, err := rand.Read(value); err != nil {
@@ -450,6 +460,7 @@ func newRunToken() (string, error) {
 	return hex.EncodeToString(value), nil
 }
 
+// truncateWorkerError 清理并截断准备持久化的 Worker 错误信息。
 func truncateWorkerError(message string) string {
 	const maxLength = 2048
 	message = strings.TrimSpace(message)
@@ -459,6 +470,7 @@ func truncateWorkerError(message string) string {
 	return message[:maxLength-3] + "..."
 }
 
+// isRetryableCallbackFailure 判断回调状态码是否允许安排重试。
 func isRetryableCallbackFailure(responseCode int) bool {
 	if responseCode == 0 {
 		return true

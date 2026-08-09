@@ -20,21 +20,22 @@ type StreamMessage struct {
 	DecodeError string
 }
 
-// StreamPublisher publishes durable execution notifications after their MySQL
-// Outbox transaction has committed.
+// StreamPublisher 在 MySQL Outbox 事务提交后发布持久化执行通知。
 type StreamPublisher struct {
 	client *goredis.Client
 }
 
-// StreamConsumer wraps the Redis Consumer Group operations used by Workers.
+// StreamConsumer 封装 Worker 使用的 Redis Consumer Group 操作。
 type StreamConsumer struct {
 	client *goredis.Client
 }
 
+// NewStreamConsumer 创建 Redis Stream 消费者。
 func NewStreamConsumer(client *goredis.Client) *StreamConsumer {
 	return &StreamConsumer{client: client}
 }
 
+// ReadNew 从 Consumer Group 读取尚未投递给任一消费者的新消息。
 func (c *StreamConsumer) ReadNew(
 	ctx context.Context,
 	stream string,
@@ -59,6 +60,7 @@ func (c *StreamConsumer) ReadNew(
 	return decodeStreams(result)
 }
 
+// AutoClaim 领取空闲时间超过阈值的 Pending 消息。
 func (c *StreamConsumer) AutoClaim(
 	ctx context.Context,
 	stream string,
@@ -85,6 +87,7 @@ func (c *StreamConsumer) AutoClaim(
 	return decodeMessages(messages), next, nil
 }
 
+// Ack 确认一条已经完成处理的 Stream 消息。
 func (c *StreamConsumer) Ack(
 	ctx context.Context,
 	stream string,
@@ -95,12 +98,12 @@ func (c *StreamConsumer) Ack(
 	if err != nil {
 		return fmt.Errorf("acknowledge Redis Stream message: %w", err)
 	}
-	// XACK is intentionally idempotent. During lease recovery two local
-	// handlers can finish around the same time; the first one removes the
-	// pending entry and the second one legitimately observes an ACK count of 0.
+	// XACK 被设计为幂等操作。Lease 恢复时两个本地处理器可能几乎同时完成；
+	// 第一个会移除 Pending 记录，第二个观察到 ACK 数量为 0 仍是合法结果。
 	return nil
 }
 
+// PendingCount 返回 Consumer Group 中尚未确认的消息数量。
 func (c *StreamConsumer) PendingCount(
 	ctx context.Context,
 	stream string,
@@ -113,8 +116,7 @@ func (c *StreamConsumer) PendingCount(
 	return pending.Count, nil
 }
 
-// TrimAcknowledgedBefore keeps the oldest pending message and all newer
-// entries, so retention never deletes a message still owned by the group.
+// TrimAcknowledgedBefore 清理指定时间前已确认的消息，同时保留最早的 Pending 消息及其后的全部消息。
 func (c *StreamConsumer) TrimAcknowledgedBefore(
 	ctx context.Context,
 	stream string,
@@ -136,6 +138,7 @@ func (c *StreamConsumer) TrimAcknowledgedBefore(
 	return trimmed, nil
 }
 
+// decodeStreams 将 Redis 返回的多个 Stream 转换为内部消息列表。
 func decodeStreams(streams []goredis.XStream) ([]StreamMessage, error) {
 	total := 0
 	for _, stream := range streams {
@@ -148,6 +151,7 @@ func decodeStreams(streams []goredis.XStream) ([]StreamMessage, error) {
 	return result, nil
 }
 
+// decodeMessages 将单个 Stream 的消息转换为内部消息列表。
 func decodeMessages(messages []goredis.XMessage) []StreamMessage {
 	result := make([]StreamMessage, 0, len(messages))
 	for _, message := range messages {
@@ -160,13 +164,14 @@ func decodeMessages(messages []goredis.XMessage) []StreamMessage {
 			Payload:     fmt.Sprint(message.Values["payload"]),
 		}
 		if err != nil {
-			item.DecodeError = fmt.Sprintf("execution_id 无效: %v", err)
+			item.DecodeError = fmt.Sprintf("invalid execution_id: %v", err)
 		}
 		result = append(result, item)
 	}
 	return result
 }
 
+// streamInt64 将 Redis Stream 中的字段值转换为 int64。
 func streamInt64(value any) (int64, error) {
 	switch typed := value.(type) {
 	case int64:
@@ -182,6 +187,7 @@ func streamInt64(value any) (int64, error) {
 	}
 }
 
+// streamIDLess 比较两个 Redis Stream 消息 ID 的先后顺序。
 func streamIDLess(left string, right string) bool {
 	parse := func(value string) (int64, int64) {
 		var milliseconds, sequence int64
@@ -193,10 +199,12 @@ func streamIDLess(left string, right string) bool {
 	return leftMS < rightMS || (leftMS == rightMS && leftSequence < rightSequence)
 }
 
+// NewStreamPublisher 创建 Redis Stream 发布者。
 func NewStreamPublisher(client *goredis.Client) *StreamPublisher {
 	return &StreamPublisher{client: client}
 }
 
+// EnsureConsumerGroup 确保指定 Stream 上的 Consumer Group 已存在。
 func (p *StreamPublisher) EnsureConsumerGroup(
 	ctx context.Context,
 	stream string,
@@ -209,6 +217,7 @@ func (p *StreamPublisher) EnsureConsumerGroup(
 	return nil
 }
 
+// Publish 将 Outbox 事件写入 Redis Stream 并返回消息 ID。
 func (p *StreamPublisher) Publish(
 	ctx context.Context,
 	stream string,
