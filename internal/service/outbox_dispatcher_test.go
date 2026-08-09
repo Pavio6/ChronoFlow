@@ -24,6 +24,7 @@ type stubOutboxRepo struct {
 	unpublished   int64
 }
 
+// ClaimBatch 为测试替身或测试辅助代码提供所需行为。
 func (r *stubOutboxRepo) ClaimBatch(
 	context.Context,
 	string,
@@ -34,6 +35,7 @@ func (r *stubOutboxRepo) ClaimBatch(
 	return r.events, r.claimErr
 }
 
+// MarkPublished 为测试替身或测试辅助代码提供所需行为。
 func (r *stubOutboxRepo) MarkPublished(
 	_ context.Context,
 	eventID string,
@@ -45,6 +47,7 @@ func (r *stubOutboxRepo) MarkPublished(
 	return nil
 }
 
+// MarkFailed 为测试替身或测试辅助代码提供所需行为。
 func (r *stubOutboxRepo) MarkFailed(
 	_ context.Context,
 	eventID string,
@@ -57,6 +60,7 @@ func (r *stubOutboxRepo) MarkFailed(
 	return nil
 }
 
+// CountUnpublished 为测试替身或测试辅助代码提供所需行为。
 func (r *stubOutboxRepo) CountUnpublished(context.Context) (int64, error) {
 	return r.unpublished, nil
 }
@@ -67,6 +71,7 @@ type stubStreamPublisher struct {
 	published []string
 }
 
+// Publish 为测试替身或测试辅助代码提供所需行为。
 func (p *stubStreamPublisher) Publish(
 	_ context.Context,
 	_ string,
@@ -77,6 +82,7 @@ func (p *stubStreamPublisher) Publish(
 	return p.messageID, p.err
 }
 
+// newTestOutboxDispatcher 为测试替身或测试辅助代码提供所需行为。
 func newTestOutboxDispatcher(
 	repo *stubOutboxRepo,
 	publisher *stubStreamPublisher,
@@ -103,6 +109,7 @@ func newTestOutboxDispatcher(
 	return dispatcher
 }
 
+// TestOutboxDispatcherPublishesAndMarksEvent 验证对应的测试场景。
 func TestOutboxDispatcherPublishesAndMarksEvent(t *testing.T) {
 	repo := &stubOutboxRepo{
 		events: []*model.OutboxEvent{{EventID: "evt-1", AggregateID: 10}},
@@ -123,6 +130,7 @@ func TestOutboxDispatcherPublishesAndMarksEvent(t *testing.T) {
 	}
 }
 
+// TestOutboxDispatcherRecordsFailureWithBackoff 验证对应的测试场景。
 func TestOutboxDispatcherRecordsFailureWithBackoff(t *testing.T) {
 	repo := &stubOutboxRepo{
 		events: []*model.OutboxEvent{{EventID: "evt-2", AggregateID: 20, Attempts: 2}},
@@ -144,6 +152,7 @@ func TestOutboxDispatcherRecordsFailureWithBackoff(t *testing.T) {
 	}
 }
 
+// TestOutboxDispatcherBackoffIsCapped 验证对应的测试场景。
 func TestOutboxDispatcherBackoffIsCapped(t *testing.T) {
 	dispatcher := newTestOutboxDispatcher(&stubOutboxRepo{}, &stubStreamPublisher{})
 	if got := dispatcher.backoff(100); got != 30*time.Second {

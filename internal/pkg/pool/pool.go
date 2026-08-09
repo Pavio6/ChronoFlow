@@ -8,7 +8,7 @@ import (
 	"github.com/panjf2000/ants/v2"
 )
 
-// WorkerPool exposes task submission for services and permits lightweight test doubles.
+// WorkerPool 定义服务提交任务所需的协程池能力，并便于测试替身实现。
 type WorkerPool interface {
 	Submit(task func()) error
 }
@@ -46,7 +46,7 @@ func (p *GoWorkerPool) Release() {
 	p.pool.Release()
 }
 
-// ReleaseTimeout stops accepting work and waits for running workers to exit.
+// ReleaseTimeout 停止接受新任务，并在指定时间内等待运行中的任务结束。
 func (p *GoWorkerPool) ReleaseTimeout(timeout time.Duration) error {
 	if err := p.pool.ReleaseTimeout(timeout); err != nil {
 		return fmt.Errorf("wait for worker pool shutdown: %w", err)
@@ -54,7 +54,7 @@ func (p *GoWorkerPool) ReleaseTimeout(timeout time.Duration) error {
 	return nil
 }
 
-// ReleaseContext stops accepting work and shares a caller-owned shutdown deadline.
+// ReleaseContext 停止接受新任务，并使用调用方提供的截止时间等待任务结束。
 func (p *GoWorkerPool) ReleaseContext(ctx context.Context) error {
 	if err := p.pool.ReleaseContext(ctx); err != nil {
 		return fmt.Errorf("wait for worker pool shutdown: %w", err)

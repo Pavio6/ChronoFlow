@@ -29,7 +29,7 @@ type ServerConfig struct {
 	Mode string `mapstructure:"mode"` // debug, release, test
 }
 
-// RuntimeConfig controls process lifecycle behavior shared by every role.
+// RuntimeConfig 配置所有角色共享的进程生命周期行为。
 type RuntimeConfig struct {
 	ShutdownTimeoutSeconds int `mapstructure:"shutdown_timeout_seconds"`
 }
@@ -43,7 +43,7 @@ type DatabaseConfig struct {
 	LogLevel        string `mapstructure:"log_level"`
 }
 
-// MigrationConfig controls the versioned SQL migration source.
+// MigrationConfig 配置带版本 SQL 迁移的来源。
 type MigrationConfig struct {
 	Path string `mapstructure:"path"`
 }
@@ -55,7 +55,7 @@ type RedisConfig struct {
 	DB       int    `mapstructure:"db"`
 }
 
-// SchedulerConfig controls the MySQL-authoritative due timer scanner.
+// SchedulerConfig 配置以 MySQL 为权威数据源的到期 Timer 扫描器。
 type SchedulerConfig struct {
 	PollIntervalMS      int `mapstructure:"poll_interval_ms"`
 	BatchSize           int `mapstructure:"batch_size"`
@@ -63,7 +63,7 @@ type SchedulerConfig struct {
 	DefaultMaxCatchUp   int `mapstructure:"default_max_catch_up"`
 }
 
-// OutboxConfig controls reliable MySQL-to-Redis Stream publishing.
+// OutboxConfig 配置从 MySQL 到 Redis Stream 的可靠发布。
 type OutboxConfig struct {
 	PollIntervalMS    int    `mapstructure:"poll_interval_ms"`
 	BatchSize         int    `mapstructure:"batch_size"`
@@ -74,7 +74,7 @@ type OutboxConfig struct {
 	StreamMaxLen      int64  `mapstructure:"stream_max_len"`
 }
 
-// WorkerConfig controls Redis Stream consumption and callback execution.
+// WorkerConfig 配置 Redis Stream 消费和回调执行行为。
 type WorkerConfig struct {
 	PoolSize               int   `mapstructure:"pool_size"`
 	ReadCount              int64 `mapstructure:"read_count"`
@@ -89,7 +89,7 @@ type WorkerConfig struct {
 	RetryMaxSeconds        int   `mapstructure:"retry_max_seconds"`
 }
 
-// RecoveryConfig controls durable execution repair and retention cleanup.
+// RecoveryConfig 配置持久化执行修复和保留数据清理行为。
 type RecoveryConfig struct {
 	Enabled                bool `mapstructure:"enabled"`
 	ScanIntervalSeconds    int  `mapstructure:"scan_interval_seconds"`
@@ -101,7 +101,7 @@ type RecoveryConfig struct {
 	StreamRetentionHours   int  `mapstructure:"stream_retention_hours"`
 }
 
-// SecurityConfig contains the deploy-time API and callback safety baseline.
+// SecurityConfig 包含部署时 API 与回调安全的基础配置。
 type SecurityConfig struct {
 	APIKey                string   `mapstructure:"api_key"`
 	AllowedOrigins        []string `mapstructure:"allowed_origins"`
@@ -109,7 +109,7 @@ type SecurityConfig struct {
 	MaxRequestBytes       int64    `mapstructure:"max_request_bytes"`
 }
 
-// MonitoringConfig controls periodic collection of health gauges.
+// MonitoringConfig 配置健康指标的周期采集。
 type MonitoringConfig struct {
 	PrometheusURL string `mapstructure:"prometheus_url"`
 	GrafanaURL    string `mapstructure:"grafana_url"`
@@ -162,18 +162,21 @@ func Load(configPath string) (*Config, error) {
 	return cfg, nil
 }
 
+// normalizeRuntimeConfig 修正进程生命周期配置中的无效值。
 func normalizeRuntimeConfig(cfg *RuntimeConfig) {
 	if cfg.ShutdownTimeoutSeconds < 1 {
 		cfg.ShutdownTimeoutSeconds = 15
 	}
 }
 
+// normalizeMigrationConfig 为迁移目录设置默认值。
 func normalizeMigrationConfig(cfg *MigrationConfig) {
 	if strings.TrimSpace(cfg.Path) == "" {
 		cfg.Path = "migrations"
 	}
 }
 
+// normalizeSchedulerConfig 修正 Scheduler 配置中的无效值。
 func normalizeSchedulerConfig(cfg *SchedulerConfig) {
 	if cfg.PollIntervalMS < 10 {
 		cfg.PollIntervalMS = 500
@@ -189,6 +192,7 @@ func normalizeSchedulerConfig(cfg *SchedulerConfig) {
 	}
 }
 
+// normalizeOutboxConfig 修正 Outbox 配置中的无效值。
 func normalizeOutboxConfig(cfg *OutboxConfig) {
 	if cfg.PollIntervalMS < 10 {
 		cfg.PollIntervalMS = 200
@@ -213,6 +217,7 @@ func normalizeOutboxConfig(cfg *OutboxConfig) {
 	}
 }
 
+// normalizeWorkerConfig 修正 Worker 配置中的无效值并保持各时间参数一致。
 func normalizeWorkerConfig(cfg *WorkerConfig) {
 	if cfg.PoolSize < 1 {
 		cfg.PoolSize = 100
@@ -250,6 +255,7 @@ func normalizeWorkerConfig(cfg *WorkerConfig) {
 	}
 }
 
+// normalizeRecoveryConfig 修正执行恢复和清理配置中的无效值。
 func normalizeRecoveryConfig(cfg *RecoveryConfig) {
 	if cfg.ScanIntervalSeconds < 1 {
 		cfg.ScanIntervalSeconds = 10
@@ -274,6 +280,7 @@ func normalizeRecoveryConfig(cfg *RecoveryConfig) {
 	}
 }
 
+// normalizeSecurityConfig 补齐安全配置的默认值。
 func normalizeSecurityConfig(cfg *SecurityConfig) {
 	if len(cfg.AllowedOrigins) == 0 {
 		cfg.AllowedOrigins = []string{"http://localhost:3000"}
@@ -283,6 +290,7 @@ func normalizeSecurityConfig(cfg *SecurityConfig) {
 	}
 }
 
+// normalizeMonitoringConfig 补齐监控服务地址的默认值。
 func normalizeMonitoringConfig(cfg *MonitoringConfig) {
 	if cfg.PrometheusURL == "" {
 		cfg.PrometheusURL = "http://localhost:9090"
@@ -319,7 +327,7 @@ func setDefaults() {
 	viper.SetDefault("scheduler.misfire_grace_seconds", 5)
 	viper.SetDefault("scheduler.default_max_catch_up", 10)
 
-	// Transactional Outbox 与 Redis Streams
+	// 事务 Outbox 与 Redis Stream
 	viper.SetDefault("outbox.poll_interval_ms", 200)
 	viper.SetDefault("outbox.batch_size", 100)
 	viper.SetDefault("outbox.claim_ttl_seconds", 30)
@@ -328,7 +336,7 @@ func setDefaults() {
 	viper.SetDefault("outbox.consumer_group", "chronoflow-workers")
 	viper.SetDefault("outbox.stream_max_len", 0)
 
-	// Redis Streams Worker
+	// Redis Stream Worker
 	viper.SetDefault("worker.pool_size", 100)
 	viper.SetDefault("worker.read_count", 20)
 	viper.SetDefault("worker.read_block_ms", 2000)
@@ -341,7 +349,7 @@ func setDefaults() {
 	viper.SetDefault("worker.retry_base_seconds", 2)
 	viper.SetDefault("worker.retry_max_seconds", 60)
 
-	// Reconciler and retention cleanup
+	// Reconciler 与保留数据清理
 	viper.SetDefault("recovery.enabled", true)
 	viper.SetDefault("recovery.scan_interval_seconds", 10)
 	viper.SetDefault("recovery.batch_size", 100)
@@ -351,7 +359,7 @@ func setDefaults() {
 	viper.SetDefault("recovery.execution_retention_days", 30)
 	viper.SetDefault("recovery.stream_retention_hours", 24)
 
-	// API and callback safety baseline
+	// API 与回调安全基础配置
 	viper.SetDefault("security.api_key", "")
 	viper.SetDefault("security.allowed_origins", []string{"http://localhost:3000"})
 	viper.SetDefault("security.allow_private_callbacks", false)

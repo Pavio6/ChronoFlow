@@ -16,6 +16,7 @@ import (
 
 type immediateWorkerPool struct{}
 
+// Submit 为测试替身或测试辅助代码提供所需行为。
 func (immediateWorkerPool) Submit(task func()) error {
 	task()
 	return nil
@@ -25,18 +26,21 @@ type stubWorkerStream struct {
 	acked []string
 }
 
+// ReadNew 为测试替身或测试辅助代码提供所需行为。
 func (s *stubWorkerStream) ReadNew(
 	context.Context, string, string, string, int64, time.Duration,
 ) ([]redisstream.StreamMessage, error) {
 	return nil, nil
 }
 
+// AutoClaim 为测试替身或测试辅助代码提供所需行为。
 func (s *stubWorkerStream) AutoClaim(
 	context.Context, string, string, string, time.Duration, string, int64,
 ) ([]redisstream.StreamMessage, string, error) {
 	return nil, "0-0", nil
 }
 
+// Ack 为测试替身或测试辅助代码提供所需行为。
 func (s *stubWorkerStream) Ack(
 	_ context.Context,
 	_ string,
@@ -47,6 +51,7 @@ func (s *stubWorkerStream) Ack(
 	return nil
 }
 
+// PendingCount 为测试替身或测试辅助代码提供所需行为。
 func (s *stubWorkerStream) PendingCount(
 	context.Context, string, string,
 ) (int64, error) {
@@ -65,18 +70,21 @@ type stubExecutionRepo struct {
 	heartbeatResult  bool
 }
 
+// Claim 为测试替身或测试辅助代码提供所需行为。
 func (r *stubExecutionRepo) Claim(
 	context.Context, int64, string, string, time.Time, time.Duration,
 ) (*model.TimerExecution, bool, error) {
 	return r.execution, r.claimed, nil
 }
 
+// Heartbeat 为测试替身或测试辅助代码提供所需行为。
 func (r *stubExecutionRepo) Heartbeat(
 	context.Context, int64, string, string, time.Time,
 ) (bool, error) {
 	return r.heartbeatResult, nil
 }
 
+// CompleteSuccess 为测试替身或测试辅助代码提供所需行为。
 func (r *stubExecutionRepo) CompleteSuccess(
 	context.Context, int64, string, string, time.Time, int, string, int64,
 ) (bool, error) {
@@ -84,6 +92,7 @@ func (r *stubExecutionRepo) CompleteSuccess(
 	return r.successUpdated, nil
 }
 
+// CompleteFailure 为测试替身或测试辅助代码提供所需行为。
 func (r *stubExecutionRepo) CompleteFailure(
 	_ context.Context,
 	_ *model.TimerExecution,
@@ -102,6 +111,7 @@ func (r *stubExecutionRepo) CompleteFailure(
 	return r.failureUpdated, r.retryScheduled && retryable, nil
 }
 
+// CountByStatus 为测试替身或测试辅助代码提供所需行为。
 func (r *stubExecutionRepo) CountByStatus(
 	context.Context,
 ) (map[model.ExecutionStatus]int64, error) {
@@ -114,6 +124,7 @@ type stubCallback struct {
 	err  error
 }
 
+// Execute 为测试替身或测试辅助代码提供所需行为。
 func (c *stubCallback) Execute(
 	context.Context,
 	*model.CallbackSnapshot,
@@ -122,6 +133,7 @@ func (c *stubCallback) Execute(
 	return c.code, c.body, c.err
 }
 
+// newTestStreamWorker 为测试替身或测试辅助代码提供所需行为。
 func newTestStreamWorker(
 	repo *stubExecutionRepo,
 	stream *stubWorkerStream,
@@ -157,6 +169,7 @@ func newTestStreamWorker(
 	return worker
 }
 
+// testClaimedExecution 为测试替身或测试辅助代码提供所需行为。
 func testClaimedExecution() *model.TimerExecution {
 	return &model.TimerExecution{
 		ID:              10,
@@ -167,6 +180,7 @@ func testClaimedExecution() *model.TimerExecution {
 	}
 }
 
+// TestStreamWorkerCompletesAndAcknowledgesSuccess 验证对应的测试场景。
 func TestStreamWorkerCompletesAndAcknowledgesSuccess(t *testing.T) {
 	repo := &stubExecutionRepo{
 		execution:      testClaimedExecution(),
@@ -189,6 +203,7 @@ func TestStreamWorkerCompletesAndAcknowledgesSuccess(t *testing.T) {
 	}
 }
 
+// TestStreamWorkerSchedulesRetryBeforeAck 验证对应的测试场景。
 func TestStreamWorkerSchedulesRetryBeforeAck(t *testing.T) {
 	repo := &stubExecutionRepo{
 		execution:      testClaimedExecution(),
@@ -219,6 +234,7 @@ func TestStreamWorkerSchedulesRetryBeforeAck(t *testing.T) {
 	}
 }
 
+// TestStreamWorkerDoesNotRetryPermanentHTTPFailure 验证对应的测试场景。
 func TestStreamWorkerDoesNotRetryPermanentHTTPFailure(t *testing.T) {
 	repo := &stubExecutionRepo{
 		execution:      testClaimedExecution(),
@@ -249,6 +265,7 @@ func TestStreamWorkerDoesNotRetryPermanentHTTPFailure(t *testing.T) {
 	}
 }
 
+// TestStreamWorkerAcknowledgesTerminalDuplicate 验证对应的测试场景。
 func TestStreamWorkerAcknowledgesTerminalDuplicate(t *testing.T) {
 	repo := &stubExecutionRepo{
 		execution: &model.TimerExecution{
@@ -269,6 +286,7 @@ func TestStreamWorkerAcknowledgesTerminalDuplicate(t *testing.T) {
 	}
 }
 
+// TestStreamWorkerDoesNotAckWhenFinalStateIsRejected 验证对应的测试场景。
 func TestStreamWorkerDoesNotAckWhenFinalStateIsRejected(t *testing.T) {
 	repo := &stubExecutionRepo{
 		execution: testClaimedExecution(),

@@ -10,7 +10,7 @@ import (
 	"gorm.io/gorm"
 )
 
-// TimerExecutionRepository owns the durable Worker state machine.
+// TimerExecutionRepository 管理 Worker 使用的持久化 Execution 状态机。
 type TimerExecutionRepository interface {
 	Claim(
 		ctx context.Context,
@@ -57,10 +57,12 @@ type timerExecutionRepo struct {
 	db *gorm.DB
 }
 
+// NewTimerExecutionRepository 创建 Worker 使用的 Execution 状态仓库。
 func NewTimerExecutionRepository(db *gorm.DB) TimerExecutionRepository {
 	return &timerExecutionRepo{db: db}
 }
 
+// Claim 基于 Lease 和 run_token 原子领取一条可执行的 Execution。
 func (r *timerExecutionRepo) Claim(
 	ctx context.Context,
 	executionID int64,
@@ -108,6 +110,7 @@ func (r *timerExecutionRepo) Claim(
 	return &execution, result.RowsAffected == 1, nil
 }
 
+// Heartbeat 在仍持有相同 run_token 时续约 Execution Lease。
 func (r *timerExecutionRepo) Heartbeat(
 	ctx context.Context,
 	executionID int64,
@@ -131,6 +134,7 @@ func (r *timerExecutionRepo) Heartbeat(
 	return result.RowsAffected == 1, nil
 }
 
+// CompleteSuccess 在仍持有相同 run_token 时写入回调成功结果。
 func (r *timerExecutionRepo) CompleteSuccess(
 	ctx context.Context,
 	executionID int64,
@@ -168,6 +172,7 @@ func (r *timerExecutionRepo) CompleteSuccess(
 	return result.RowsAffected == 1, nil
 }
 
+// CompleteFailure 在仍持有相同 run_token 时写入失败结果，并按需创建重试 Outbox。
 func (r *timerExecutionRepo) CompleteFailure(
 	ctx context.Context,
 	execution *model.TimerExecution,
@@ -241,6 +246,7 @@ func (r *timerExecutionRepo) CompleteFailure(
 	return updated, updated && retryScheduled, nil
 }
 
+// CountByStatus 统计各 Execution 状态的数量。
 func (r *timerExecutionRepo) CountByStatus(
 	ctx context.Context,
 ) (map[model.ExecutionStatus]int64, error) {
@@ -263,6 +269,7 @@ func (r *timerExecutionRepo) CountByStatus(
 	return result, nil
 }
 
+// newExecutionOutboxEvent 为指定 Execution 创建可投递的 Outbox 事件。
 func newExecutionOutboxEvent(
 	executionID int64,
 	eventID string,

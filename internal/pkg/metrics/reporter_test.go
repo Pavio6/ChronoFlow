@@ -8,6 +8,7 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
+// TestReporterExportsMVPMetricsWithoutHighCardinalityLabels 验证对应的测试场景。
 func TestReporterExportsMVPMetricsWithoutHighCardinalityLabels(t *testing.T) {
 	reporter := NewReporter()
 	reporter.ReportSchedulerBatch(1, 1, 0, 50*time.Millisecond, true)
@@ -56,6 +57,7 @@ func TestReporterExportsMVPMetricsWithoutHighCardinalityLabels(t *testing.T) {
 	assertOnlyLabel(t, byName[Executions], LabelStatus)
 }
 
+// assertOnlyLabel 为测试替身或测试辅助代码提供所需行为。
 func assertOnlyLabel(t *testing.T, family *dto.MetricFamily, label string) {
 	t.Helper()
 	if family == nil {

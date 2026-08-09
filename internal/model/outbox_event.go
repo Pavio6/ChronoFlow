@@ -9,7 +9,7 @@ const (
 	OutboxEventExecutionRecovery  = "EXECUTION_RECOVERY"
 )
 
-// OutboxEvent is committed with the aggregate change and published later.
+// OutboxEvent 与聚合变更一同提交，并由 Dispatcher 在之后发布。
 type OutboxEvent struct {
 	ID                 int64      `gorm:"primaryKey;autoIncrement" json:"id"`
 	EventID            string     `gorm:"size:64;not null;uniqueIndex:uk_outbox_event_id" json:"event_id"`
@@ -29,6 +29,7 @@ type OutboxEvent struct {
 	UpdatedAt          time.Time  `gorm:"autoUpdateTime" json:"updated_at"`
 }
 
+// TableName 返回 Outbox 事件对应的数据表名称。
 func (OutboxEvent) TableName() string {
 	return "outbox_events"
 }

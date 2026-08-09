@@ -10,6 +10,7 @@ import (
 	"github.com/chronoflow/internal/model"
 )
 
+// TestValidateURLRejectsPrivateTargets 验证对应的测试场景。
 func TestValidateURLRejectsPrivateTargets(t *testing.T) {
 	for _, target := range []string{
 		"http://127.0.0.1/callback",
@@ -27,6 +28,7 @@ func TestValidateURLRejectsPrivateTargets(t *testing.T) {
 	}
 }
 
+// TestClientSendsStableIdempotencyKey 验证对应的测试场景。
 func TestClientSendsStableIdempotencyKey(t *testing.T) {
 	var gotKey string
 	server := httptest.NewServer(http.HandlerFunc(func(
@@ -61,6 +63,7 @@ func TestClientSendsStableIdempotencyKey(t *testing.T) {
 	}
 }
 
+// TestClientLimitsResponseBody 验证对应的测试场景。
 func TestClientLimitsResponseBody(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(
 		writer http.ResponseWriter,

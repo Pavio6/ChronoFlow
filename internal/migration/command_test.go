@@ -5,6 +5,7 @@ import (
 	"testing"
 )
 
+// TestParseCommand 验证对应的测试场景。
 func TestParseCommand(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -42,6 +43,7 @@ func TestParseCommand(t *testing.T) {
 	}
 }
 
+// TestParseCommandHelp 验证对应的测试场景。
 func TestParseCommandHelp(t *testing.T) {
 	_, err := ParseCommand([]string{"help"})
 	if !errors.Is(err, ErrHelp) {
@@ -49,6 +51,7 @@ func TestParseCommandHelp(t *testing.T) {
 	}
 }
 
+// TestMySQLURL 验证对应的测试场景。
 func TestMySQLURL(t *testing.T) {
 	if got := mysqlURL("root:secret@tcp(localhost:3306)/chronoflow"); got != "mysql://root:secret@tcp(localhost:3306)/chronoflow" {
 		t.Fatalf("mysqlURL() = %q", got)
@@ -58,6 +61,7 @@ func TestMySQLURL(t *testing.T) {
 	}
 }
 
+// TestFileSourceURL 验证对应的测试场景。
 func TestFileSourceURL(t *testing.T) {
 	got, err := fileSourceURL("migrations")
 	if err != nil {

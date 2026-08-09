@@ -5,7 +5,7 @@ import (
 	"github.com/chronoflow/internal/pkg/metrics"
 )
 
-// NewAll composes every role into one process for local development only.
+// NewAll 为本地开发在同一进程中组合全部角色。
 func NewAll(cfg *config.Config) (*Application, error) {
 	application, err := newApplication(cfg, RoleAll)
 	if err != nil {

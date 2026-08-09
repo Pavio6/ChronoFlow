@@ -11,21 +11,20 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-// DueTimerResolver applies Cron and misfire policy to one locked timer.
+// DueTimerResolver 为一条已锁定的 Timer 应用 Cron 和错过触发策略。
 type DueTimerResolver func(
 	definition *model.TimerDefinition,
 	now time.Time,
 ) (occurrences []time.Time, nextFireAt time.Time, err error)
 
-// ScheduleBatchResult summarizes one committed scheduler transaction.
+// ScheduleBatchResult 汇总一次已提交 Scheduler 事务的结果。
 type ScheduleBatchResult struct {
 	Timers     int
 	Executions int
 	Duplicates int
 }
 
-// DueTimerRepository atomically creates executions, advances next_fire_at and
-// appends Outbox events.
+// DueTimerRepository 在一个事务中创建 Execution、推进 next_fire_at 并追加 Outbox 事件。
 type DueTimerRepository interface {
 	ScheduleDueBatch(
 		ctx context.Context,
@@ -39,10 +38,12 @@ type dueTimerRepo struct {
 	db *gorm.DB
 }
 
+// NewDueTimerRepository 创建到期 Timer 调度仓库。
 func NewDueTimerRepository(db *gorm.DB) DueTimerRepository {
 	return &dueTimerRepo{db: db}
 }
 
+// ScheduleDueBatch 领取一批到期 Timer，并在事务中生成 Execution 与 Outbox 事件。
 func (r *dueTimerRepo) ScheduleDueBatch(
 	ctx context.Context,
 	now time.Time,
@@ -144,10 +145,12 @@ func (r *dueTimerRepo) ScheduleDueBatch(
 	return result, nil
 }
 
+// timePointer 返回指向给定时间值的指针。
 func timePointer(value time.Time) *time.Time {
 	return &value
 }
 
+// buildRequestSnapshot 从 Timer 定义构造不可变的回调请求快照。
 func buildRequestSnapshot(definition *model.TimerDefinition) (string, error) {
 	headers := make(map[string]string)
 	if definition.CallbackHeaders != "" {

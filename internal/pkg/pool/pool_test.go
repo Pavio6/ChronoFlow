@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// TestReleaseContextWaitsForRunningTask 验证对应的测试场景。
 func TestReleaseContextWaitsForRunningTask(t *testing.T) {
 	workerPool, err := NewGoWorkerPool(1)
 	if err != nil {

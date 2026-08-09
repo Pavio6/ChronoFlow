@@ -13,6 +13,7 @@ import (
 
 type readinessChecker func(context.Context) map[string]string
 
+// newRouter 创建并配置通用 Gin 路由器。
 func newRouter(cfg *config.Config) *gin.Engine {
 	gin.SetMode(cfg.Server.Mode)
 	router := gin.New()
@@ -22,6 +23,7 @@ func newRouter(cfg *config.Config) *gin.Engine {
 	return router
 }
 
+// newOperationalHTTPHandler 创建仅暴露运行状态接口的 HTTP 处理器。
 func newOperationalHTTPHandler(
 	cfg *config.Config,
 	role Role,
@@ -40,6 +42,7 @@ func newOperationalHTTPHandler(
 	return router
 }
 
+// registerOperationalRoutes 注册健康检查、就绪检查和指标接口。
 func registerOperationalRoutes(
 	router *gin.Engine,
 	role Role,

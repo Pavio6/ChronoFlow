@@ -12,7 +12,7 @@ import (
 	"github.com/chronoflow/internal/service"
 )
 
-// NewDispatcher constructs only the transactional Outbox dispatcher process.
+// NewDispatcher 创建只负责发布 Transactional Outbox 的 Dispatcher 进程。
 func NewDispatcher(cfg *config.Config) (*Application, error) {
 	application, err := newApplication(cfg, RoleDispatcher)
 	if err != nil {
@@ -35,6 +35,7 @@ func NewDispatcher(cfg *config.Config) (*Application, error) {
 	return application, nil
 }
 
+// configureDispatcher 初始化 Consumer Group 并注册 Outbox Dispatcher 后台服务。
 func (a *Application) configureDispatcher(reporter *metrics.Reporter, publisher *redisstream.StreamPublisher) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

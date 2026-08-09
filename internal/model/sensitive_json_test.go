@@ -6,6 +6,7 @@ import (
 	"testing"
 )
 
+// TestSensitiveCallbackDataIsNotSerialized 验证对应的测试场景。
 func TestSensitiveCallbackDataIsNotSerialized(t *testing.T) {
 	executionJSON, err := json.Marshal(TimerExecution{
 		ID:              1,

@@ -8,6 +8,7 @@ import (
 	"github.com/spf13/viper"
 )
 
+// TestLoadDefaults 验证对应的测试场景。
 func TestLoadDefaults(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
@@ -48,6 +49,7 @@ func TestLoadDefaults(t *testing.T) {
 	}
 }
 
+// TestLoadNormalizesInvalidConcurrencyAndLeaseValues 验证对应的测试场景。
 func TestLoadNormalizesInvalidConcurrencyAndLeaseValues(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)
@@ -76,6 +78,7 @@ func TestLoadNormalizesInvalidConcurrencyAndLeaseValues(t *testing.T) {
 	}
 }
 
+// TestLoadSupportsPrefixedEnvironmentOverrides 验证对应的测试场景。
 func TestLoadSupportsPrefixedEnvironmentOverrides(t *testing.T) {
 	viper.Reset()
 	t.Cleanup(viper.Reset)

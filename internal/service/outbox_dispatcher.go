@@ -23,8 +23,8 @@ type outboxStreamPublisher interface {
 	) (string, error)
 }
 
-// OutboxDispatcher publishes committed MySQL events to Redis Streams. A crash
-// after XADD and before MarkPublished intentionally produces a duplicate.
+// OutboxDispatcher 将已提交的 MySQL 事件发布到 Redis Stream。
+// 若在 XADD 后、MarkPublished 前崩溃，后续恢复会产生可预期的重复消息。
 type OutboxDispatcher struct {
 	repo      repository.OutboxRepository
 	publisher outboxStreamPublisher
@@ -34,6 +34,7 @@ type OutboxDispatcher struct {
 	now       func() time.Time
 }
 
+// NewOutboxDispatcher 创建负责将 Outbox 事件投递到 Redis Stream 的 Dispatcher。
 func NewOutboxDispatcher(
 	repo repository.OutboxRepository,
 	publisher outboxStreamPublisher,
@@ -51,6 +52,7 @@ func NewOutboxDispatcher(
 	}
 }
 
+// Start 按配置的轮询间隔持续投递待发布的 Outbox 事件。
 func (d *OutboxDispatcher) Start(ctx context.Context) {
 	logger.Info("Outbox dispatcher started",
 		zap.String("owner", d.owner),
@@ -72,6 +74,7 @@ func (d *OutboxDispatcher) Start(ctx context.Context) {
 	}
 }
 
+// dispatchOnce 领取一批 Outbox 事件，并分别记录发布成功或失败结果。
 func (d *OutboxDispatcher) dispatchOnce(ctx context.Context) {
 	now := d.now()
 	events, err := d.repo.ClaimBatch(
@@ -128,9 +131,8 @@ func (d *OutboxDispatcher) dispatchOnce(ctx context.Context) {
 			messageID,
 			d.now(),
 		); err != nil {
-			// The Redis message already exists. Leaving the claim to expire makes
-			// the event publish again, and the future Worker must deduplicate via
-			// its MySQL execution claim.
+			// Redis 消息已写入。等待领取 Lease 过期后事件会再次发布，
+			// 后续 Worker 通过 MySQL Execution Claim 完成去重。
 			d.reporter.ReportOutboxPublish(false)
 			logger.Error("Outbox dispatcher failed to confirm publication; event may be delivered again",
 				zap.String("event_id", event.EventID),
@@ -145,6 +147,7 @@ func (d *OutboxDispatcher) dispatchOnce(ctx context.Context) {
 	d.refreshBacklogMetric(ctx)
 }
 
+// refreshBacklogMetric 刷新未发布 Outbox 事件数量指标。
 func (d *OutboxDispatcher) refreshBacklogMetric(ctx context.Context) {
 	count, err := d.repo.CountUnpublished(ctx)
 	if err != nil {
@@ -154,6 +157,7 @@ func (d *OutboxDispatcher) refreshBacklogMetric(ctx context.Context) {
 	d.reporter.SetOutboxUnpublished(count)
 }
 
+// backoff 根据尝试次数计算受上限限制的指数退避时间。
 func (d *OutboxDispatcher) backoff(attempt int) time.Duration {
 	if attempt < 1 {
 		attempt = 1
@@ -170,6 +174,7 @@ func (d *OutboxDispatcher) backoff(attempt int) time.Duration {
 	return time.Duration(delaySeconds) * time.Second
 }
 
+// truncateOutboxError 清理并截断准备持久化的 Outbox 错误信息。
 func truncateOutboxError(message string) string {
 	const maxLength = 2048
 	message = strings.TrimSpace(message)

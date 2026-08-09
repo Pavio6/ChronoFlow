@@ -1,7 +1,6 @@
 package app
 
-// Role identifies a deployable ChronoFlow runtime. RoleAll is deliberately a
-// local-development composition, not a production deployment target.
+// Role 表示一个可部署的 ChronoFlow 运行角色；RoleAll 仅用于本地开发组合。
 type Role string
 
 const (
@@ -20,7 +19,7 @@ var allRoles = []Role{
 	RoleAll,
 }
 
-// RuntimeMode describes the implementation status exposed by health endpoints.
+// RuntimeMode 返回健康检查接口展示的角色运行模式。
 func (r Role) RuntimeMode() string {
 	switch r {
 	case RoleAPI:
@@ -38,7 +37,7 @@ func (r Role) RuntimeMode() string {
 	}
 }
 
-// Components returns the runtime components owned by the role.
+// Components 返回该角色拥有的运行组件名称。
 func (r Role) Components() []string {
 	switch r {
 	case RoleAPI:
