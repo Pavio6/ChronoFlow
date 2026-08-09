@@ -14,14 +14,16 @@ const (
 	TimerStatusDeleted TimerStatus = "DELETED"
 )
 
-// MisfirePolicy controls how a timer recovers after the scheduler misses one
-// or more planned fire times.
+// MisfirePolicy 定义 Scheduler 错过一个或多个触发点后的补偿方式。
 type MisfirePolicy string
 
 const (
-	MisfirePolicySkip     MisfirePolicy = "SKIP"
+	// MisfirePolicySkip 跳过所有已错过的触发点，只计算并保留未来的下一次触发时间。
+	MisfirePolicySkip MisfirePolicy = "SKIP"
+	// MisfirePolicyFireOnce 将已错过的触发点合并为一次立即补发，然后推进到未来的下一次触发时间。
 	MisfirePolicyFireOnce MisfirePolicy = "FIRE_ONCE"
-	MisfirePolicyCatchUp  MisfirePolicy = "CATCH_UP"
+	// MisfirePolicyCatchUp 按时间顺序补发多个已错过的触发点，数量受 max_catch_up 限制。
+	MisfirePolicyCatchUp MisfirePolicy = "CATCH_UP"
 )
 
 // TimerDefinition 定时器定义
@@ -35,8 +37,7 @@ type TimerDefinition struct {
 	CallbackBody    string        `gorm:"type:text;comment:回调请求体" json:"callback_body"`
 	CallbackHeaders string        `gorm:"type:text;comment:回调请求头(JSON)" json:"-"`
 	Status          TimerStatus   `gorm:"size:32;not null;default:INACTIVE;index:idx_timer_due,priority:1;comment:状态" json:"status"`
-	NextFireAt      *time.Time    `gorm:"index:idx_timer_due,priority:2;comment:下一次计划触发时间(宿主机本地时区)" json:"next_fire_at"`
-	Timezone        string        `gorm:"size:64;not null;default:Local;comment:Cron计算时区" json:"timezone"`
+	NextFireAt      *time.Time    `gorm:"index:idx_timer_due,priority:2;comment:下一次计划触发时间" json:"next_fire_at"`
 	MisfirePolicy   MisfirePolicy `gorm:"size:32;not null;default:FIRE_ONCE;comment:错过触发策略" json:"misfire_policy"`
 	MaxCatchUp      int           `gorm:"type:int;not null;default:10;comment:单轮最大补偿次数" json:"max_catch_up"`
 	Version         int64         `gorm:"not null;default:1;comment:乐观锁版本" json:"version"`
@@ -58,7 +59,6 @@ type CreateTimerDefinitionRequest struct {
 	CallbackMethod  string            `json:"callback_method" binding:"required,oneof=GET POST PUT DELETE PATCH"`
 	CallbackBody    string            `json:"callback_body"`
 	CallbackHeaders map[string]string `json:"callback_headers"`
-	Timezone        string            `json:"timezone"`
 	MisfirePolicy   MisfirePolicy     `json:"misfire_policy"`
 	MaxCatchUp      int               `json:"max_catch_up" binding:"omitempty,min=1,max=1000"`
 }

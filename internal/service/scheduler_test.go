@@ -17,6 +17,7 @@ type stubDueTimerRepo struct {
 	err    error
 }
 
+// ScheduleDueBatch 为测试替身或测试辅助代码提供所需行为。
 func (r *stubDueTimerRepo) ScheduleDueBatch(
 	context.Context,
 	time.Time,
@@ -26,6 +27,7 @@ func (r *stubDueTimerRepo) ScheduleDueBatch(
 	return r.result, r.err
 }
 
+// newTestScheduler 为测试替身或测试辅助代码提供所需行为。
 func newTestScheduler() *Scheduler {
 	return NewScheduler(
 		&stubDueTimerRepo{},
@@ -40,6 +42,7 @@ func newTestScheduler() *Scheduler {
 	)
 }
 
+// TestSchedulerNormalOccurrence 验证对应的测试场景。
 func TestSchedulerNormalOccurrence(t *testing.T) {
 	scheduler := newTestScheduler()
 	now := time.Date(2026, time.August, 7, 10, 0, 0, 500000000, time.Local)
@@ -58,6 +61,7 @@ func TestSchedulerNormalOccurrence(t *testing.T) {
 	}
 }
 
+// TestSchedulerMisfirePolicies 验证对应的测试场景。
 func TestSchedulerMisfirePolicies(t *testing.T) {
 	scheduler := newTestScheduler()
 	now := time.Date(2026, time.August, 7, 10, 5, 30, 0, time.Local)
@@ -109,33 +113,13 @@ func TestSchedulerMisfirePolicies(t *testing.T) {
 	}
 }
 
-func TestSchedulerUsesTimerTimezone(t *testing.T) {
-	scheduler := newTestScheduler()
-	dueLocal := time.Date(2026, time.August, 7, 10, 0, 0, 0, time.Local)
-	definition := testDefinition(dueLocal, model.MisfirePolicyFireOnce)
-	definition.CronExpr = "0 0 10 * * *"
-	definition.Timezone = "Asia/Shanghai"
-
-	occurrences, next, err := scheduler.resolveTimer(definition, dueLocal)
-	if err != nil {
-		t.Fatalf("resolveTimer: %v", err)
-	}
-	if len(occurrences) != 1 || !occurrences[0].Equal(dueLocal) {
-		t.Fatalf("occurrences = %v, want %s", occurrences, dueLocal)
-	}
-	wantNext := dueLocal.Add(24 * time.Hour)
-	if !next.Equal(wantNext) {
-		t.Fatalf("next = %s, want %s", next, wantNext)
-	}
-}
-
+// testDefinition 为测试替身或测试辅助代码提供所需行为。
 func testDefinition(next time.Time, policy model.MisfirePolicy) *model.TimerDefinition {
 	return &model.TimerDefinition{
 		ID:            1,
 		CronExpr:      "0 * * * * *",
 		Status:        model.TimerStatusActive,
 		NextFireAt:    &next,
-		Timezone:      "Local",
 		MisfirePolicy: policy,
 		MaxCatchUp:    10,
 		Version:       1,

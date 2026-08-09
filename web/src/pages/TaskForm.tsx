@@ -28,7 +28,6 @@ interface FormValues {
   callback_method: CreateTimerRequest['callback_method'];
   callback_body?: string;
   callback_headers?: string;
-  timezone: string;
   misfire_policy: MisfirePolicy;
   max_catch_up: number;
 }
@@ -90,7 +89,6 @@ const TaskForm: React.FC = () => {
           initialValues={{
             app: 'default',
             callback_method: 'POST',
-            timezone: 'UTC',
             misfire_policy: 'FIRE_ONCE',
             max_catch_up: 10,
           }}
@@ -137,16 +135,7 @@ const TaskForm: React.FC = () => {
           </Form.Item>
 
           <Row gutter={16}>
-            <Col xs={24} md={8}>
-              <Form.Item
-                name="timezone"
-                label="时区"
-                rules={[{ required: true }]}
-              >
-                <Input placeholder="UTC 或 Asia/Shanghai" />
-              </Form.Item>
-            </Col>
-            <Col xs={24} md={8}>
+            <Col xs={24} md={12}>
               <Form.Item
                 name="misfire_policy"
                 label="错过触发策略"
@@ -161,7 +150,7 @@ const TaskForm: React.FC = () => {
                 />
               </Form.Item>
             </Col>
-            <Col xs={24} md={8}>
+            <Col xs={24} md={12}>
               <Form.Item
                 name="max_catch_up"
                 label="单轮追赶上限"

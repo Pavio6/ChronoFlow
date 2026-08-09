@@ -127,7 +127,6 @@ curl -X POST http://localhost:8080/api/v1/timers \
     "callback_url": "https://example.com/jobs/heartbeat",
     "callback_method": "POST",
     "callback_body": "{\"source\":\"chronoflow\"}",
-    "timezone": "Asia/Shanghai",
     "misfire_policy": "FIRE_ONCE",
     "max_catch_up": 10
   }'
@@ -213,7 +212,3 @@ go run ./cmd/migrate down 1
 ### 时间约定
 
 ChronoFlow 使用当前时间读写 MySQL `DATETIME` 字段，DSN 使用 `loc=Local`。
-
-多机部署中的 ChronoFlow 实例、MySQL 和迁移环境使用相同的时区。
-
-Timer 的 `timezone` 用于 Cron 计算和展示。

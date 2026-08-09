@@ -53,7 +53,7 @@ make dev-worker
 一次正常的执行路径如下：
 
 1. API 创建 Timer，初始状态为 `INACTIVE`。
-2. API 激活 Timer，按该 Timer 的 `timezone` 和 Cron 表达式计算第一个 `next_fire_at`。
+2. API 激活 Timer，按 Cron 表达式计算第一个 `next_fire_at`。
 3. Scheduler 领取到期 Timer，并在一个 MySQL 事务中：创建 `PENDING` Execution、创建 `EXECUTION_READY` Outbox、推进 Timer 的 `next_fire_at`。
 4. Dispatcher 领取尚未发布的 Outbox，通过 `XADD` 写入 Redis Stream，然后回写 `published_at`。
 5. Worker 以 Consumer Group 读取 Stream 消息，先在 MySQL 抢占 Execution 的 Lease，再发起 HTTP 回调。
@@ -89,7 +89,7 @@ API 只提供管理和查询能力，不扫描到期 Timer、不发布 Redis 消
 - 提供管理前端静态资源与 Grafana 反向代理；
 - 提供 `/health`、`/ready`、`/metrics`。
 
-Timer 创建时会校验六字段 Cron、回调 URL、时区和 misfire 策略。创建后的 Timer 为 `INACTIVE`；只有调用激活接口后才会写入权威的 `next_fire_at`，进入 Scheduler 的扫描范围。
+Timer 创建时会校验六字段 Cron、回调 URL 和 misfire 策略。创建后的 Timer 为 `INACTIVE`；只有调用激活接口后才会写入权威的 `next_fire_at`，进入 Scheduler 的扫描范围。
 
 ### 3.2 运行方式与频率
 
@@ -121,7 +121,7 @@ Scheduler 只依赖 MySQL，不依赖 Redis。启动后会立即执行一次调�
 
 每个被领取的 Timer 在**同一个 MySQL 事务**内完成：
 
-1. 根据 Cron、Timer `timezone` 和 misfire 策略计算本轮应产生的触发点及新的 `next_fire_at`；
+1. 根据 Cron 和 misfire 策略计算本轮应产生的触发点及新的 `next_fire_at`；
 2. 每个触发点插入一条 `PENDING` Execution；
 3. 为每条新 Execution 插入一条 `EXECUTION_READY` Outbox；
 4. 乐观锁更新 Timer 的 `next_fire_at` 与 `version`；
@@ -250,10 +250,6 @@ Worker 内置 Stream 清理器：
 ## 7. 时间语义与部署约束
 
 当前项目以当前时间读写 MySQL `DATETIME` 字段，程序不会强制转换为 UTC。
-
-未来多机部署时，所有 API、Scheduler、Dispatcher、Worker、MySQL 和执行迁移的机器必须使用相同的时区。否则相同的 `DATETIME` 字面值会被不同机器解释为不同实际时刻，可能造成提前或延后调度。
-
-Timer 的 `timezone` 是单个 Cron 的计算时区；未传入时默认使用 `Local`。Cron 在自身时区算出触发点后，系统以当前时间保存和比较该时刻。
 
 ## 8. 监控与排障入口
 

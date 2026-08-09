@@ -20,7 +20,6 @@ export interface TimerDefinition {
   callback_body: string;
   status: TimerStatus;
   next_fire_at: string | null;
-  timezone: string;
   misfire_policy: MisfirePolicy;
   max_catch_up: number;
   version: number;
@@ -36,7 +35,6 @@ export interface CreateTimerRequest {
   callback_method: 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
   callback_body?: string;
   callback_headers?: Record<string, string>;
-  timezone?: string;
   misfire_policy?: MisfirePolicy;
   max_catch_up?: number;
 }

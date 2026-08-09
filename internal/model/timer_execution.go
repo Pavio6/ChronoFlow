@@ -2,7 +2,7 @@ package model
 
 import "time"
 
-// ExecutionStatus is the durable state of one scheduled occurrence.
+// ExecutionStatus 表示一次计划触发对应 Execution 的持久化状态。
 type ExecutionStatus string
 
 const (
@@ -14,12 +14,12 @@ const (
 	ExecutionStatusCancelled ExecutionStatus = "CANCELLED"
 )
 
-// TimerExecution is the MySQL source of truth for one planned callback.
+// TimerExecution 是一次计划回调的 MySQL 权威记录。
 type TimerExecution struct {
 	ID              int64           `gorm:"primaryKey;autoIncrement" json:"id"`
 	TimerID         int64           `gorm:"not null;uniqueIndex:uk_execution_schedule;index" json:"timer_id"`
 	TimerName       string          `gorm:"column:timer_name;->;-:migration" json:"timer_name,omitempty"`
-	ScheduledAt     time.Time       `gorm:"not null;uniqueIndex:uk_execution_schedule;index;comment:计划触发时间(宿主机本地时区)" json:"scheduled_at"`
+	ScheduledAt     time.Time       `gorm:"not null;uniqueIndex:uk_execution_schedule;index;comment:计划触发时间" json:"scheduled_at"`
 	Status          ExecutionStatus `gorm:"size:32;not null;default:PENDING;index:idx_execution_recovery,priority:1" json:"status"`
 	Attempt         int             `gorm:"type:int;not null;default:0" json:"attempt"`
 	MaxAttempts     int             `gorm:"type:int;not null;default:3" json:"max_attempts"`
@@ -55,11 +55,12 @@ type ExecutionListResponse struct {
 	Stats    map[ExecutionStatus]int64 `json:"stats"`
 }
 
+// TableName 返回 Execution 对应的数据表名称。
 func (TimerExecution) TableName() string {
 	return "timer_executions"
 }
 
-// CallbackSnapshot freezes callback settings at schedule time.
+// CallbackSnapshot 固化调度时刻的回调配置。
 type CallbackSnapshot struct {
 	URL     string            `json:"url"`
 	Method  string            `json:"method"`
@@ -67,6 +68,7 @@ type CallbackSnapshot struct {
 	Headers map[string]string `json:"headers,omitempty"`
 }
 
+// IsTerminal 判断 Execution 是否已进入终态。
 func (e *TimerExecution) IsTerminal() bool {
 	return e.Status == ExecutionStatusSuccess ||
 		e.Status == ExecutionStatusFailed ||

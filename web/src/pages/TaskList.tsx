@@ -73,7 +73,6 @@ const TaskList: React.FC = () => {
       width: 140,
       render: (text: string) => <code className="inline-code">{text}</code>,
     },
-    { title: '时区', dataIndex: 'timezone', width: 130 },
     {
       title: '下次触发',
       dataIndex: 'next_fire_at',

@@ -1,12 +1,6 @@
 -- ChronoFlow 00001 initial schema (UP).
 -- This migration creates the complete current schema for a new environment.
 
-CREATE DATABASE IF NOT EXISTS chronoflow
-    DEFAULT CHARACTER SET utf8mb4
-    DEFAULT COLLATE utf8mb4_unicode_ci;
-
-USE chronoflow;
-
 CREATE TABLE IF NOT EXISTS timer_definitions (
     id               BIGINT PRIMARY KEY AUTO_INCREMENT COMMENT '定时器ID',
     app              VARCHAR(128) NOT NULL COMMENT '应用名',
@@ -18,7 +12,6 @@ CREATE TABLE IF NOT EXISTS timer_definitions (
     callback_headers TEXT COMMENT '回调请求头（JSON格式）',
     status           VARCHAR(32) NOT NULL DEFAULT 'INACTIVE' COMMENT 'ACTIVE/INACTIVE/DELETED',
     next_fire_at     DATETIME(3) NULL COMMENT '下一次计划触发时间',
-    timezone         VARCHAR(64) NOT NULL DEFAULT 'Local' COMMENT 'Cron计算时区',
     misfire_policy   VARCHAR(32) NOT NULL DEFAULT 'FIRE_ONCE' COMMENT 'SKIP/FIRE_ONCE/CATCH_UP',
     max_catch_up     INT NOT NULL DEFAULT 10 COMMENT '单轮最大补偿次数',
     version          BIGINT NOT NULL DEFAULT 1 COMMENT '乐观锁版本',

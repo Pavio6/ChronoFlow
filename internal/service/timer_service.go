@@ -41,18 +41,10 @@ func NewTimerService(
 func (s *TimerService) Create(req *model.CreateTimerDefinitionRequest) (*model.TimerDefinition, error) {
 	// 验证 Cron 表达式
 	if err := s.parser.ValidateCronExpr(req.CronExpr); err != nil {
-		return nil, fmt.Errorf("无效的 Cron 表达式: %w", err)
+		return nil, fmt.Errorf("invalid cron expression: %w", err)
 	}
-	timezone := req.Timezone
-	if timezone == "" {
-		timezone = time.Local.String()
-	}
-	location, err := time.LoadLocation(timezone)
-	if err != nil {
-		return nil, fmt.Errorf("无效的时区 %q: %w", timezone, err)
-	}
-	if _, err := s.parser.NextTriggerTime(req.CronExpr, time.Now().In(location)); err != nil {
-		return nil, fmt.Errorf("Cron 表达式无法产生下一次触发时间: %w", err)
+	if _, err := s.parser.NextTriggerTime(req.CronExpr, time.Now()); err != nil {
+		return nil, fmt.Errorf("cron expression cannot produce a next trigger time: %w", err)
 	}
 	if err := callback.ValidateURL(
 		req.CallbackURL,
@@ -67,7 +59,7 @@ func (s *TimerService) Create(req *model.CreateTimerDefinitionRequest) (*model.T
 	switch misfirePolicy {
 	case model.MisfirePolicySkip, model.MisfirePolicyFireOnce, model.MisfirePolicyCatchUp:
 	default:
-		return nil, fmt.Errorf("无效的 misfire 策略: %s", misfirePolicy)
+		return nil, fmt.Errorf("invalid misfire policy: %s", misfirePolicy)
 	}
 	maxCatchUp := req.MaxCatchUp
 	if maxCatchUp < 1 {
@@ -79,7 +71,7 @@ func (s *TimerService) Create(req *model.CreateTimerDefinitionRequest) (*model.T
 	if req.CallbackHeaders != nil {
 		b, err := json.Marshal(req.CallbackHeaders)
 		if err != nil {
-			return nil, fmt.Errorf("序列化回调头失败: %w", err)
+			return nil, fmt.Errorf("marshal callback headers: %w", err)
 		}
 		headersJSON = string(b)
 	}
@@ -94,14 +86,13 @@ func (s *TimerService) Create(req *model.CreateTimerDefinitionRequest) (*model.T
 		CallbackBody:    req.CallbackBody,
 		CallbackHeaders: headersJSON,
 		Status:          model.TimerStatusInactive,
-		Timezone:        timezone,
 		MisfirePolicy:   misfirePolicy,
 		MaxCatchUp:      maxCatchUp,
 		Version:         1,
 	}
 
 	if err := s.defRepo.Create(def); err != nil {
-		return nil, fmt.Errorf("创建定时器失败: %w", err)
+		return nil, fmt.Errorf("create timer: %w", err)
 	}
 
 	return def, nil
@@ -111,10 +102,10 @@ func (s *TimerService) Create(req *model.CreateTimerDefinitionRequest) (*model.T
 func (s *TimerService) GetByID(id int64) (*model.TimerDefinition, error) {
 	def, err := s.defRepo.GetByID(id)
 	if err != nil {
-		return nil, fmt.Errorf("查询定时器失败: %w", err)
+		return nil, fmt.Errorf("get timer: %w", err)
 	}
 	if def == nil {
-		return nil, fmt.Errorf("定时器不存在，id=%d", id)
+		return nil, fmt.Errorf("timer does not exist, id=%d", id)
 	}
 	return def, nil
 }
@@ -122,7 +113,7 @@ func (s *TimerService) GetByID(id int64) (*model.TimerDefinition, error) {
 // Delete 逻辑删除定时器定义
 func (s *TimerService) Delete(id int64) error {
 	if err := s.defRepo.Delete(id); err != nil {
-		return fmt.Errorf("删除定时器失败: %w", err)
+		return fmt.Errorf("delete timer: %w", err)
 	}
 	return nil
 }
@@ -139,11 +130,11 @@ func (s *TimerService) List(req *model.TimerDefinitionListRequest) (*model.Timer
 
 	items, total, err := s.defRepo.List(req)
 	if err != nil {
-		return nil, fmt.Errorf("查询定时器列表失败: %w", err)
+		return nil, fmt.Errorf("list timers: %w", err)
 	}
 	statusCounts, err := s.defRepo.CountListByStatus(req)
 	if err != nil {
-		return nil, fmt.Errorf("统计定时器状态失败: %w", err)
+		return nil, fmt.Errorf("count timer statuses: %w", err)
 	}
 	active := statusCounts[model.TimerStatusActive]
 	inactive := statusCounts[model.TimerStatusInactive]
@@ -161,36 +152,31 @@ func (s *TimerService) List(req *model.TimerDefinitionListRequest) (*model.Timer
 	}, nil
 }
 
-// Activate computes and stores the first authoritative next_fire_at.
+// Activate 计算并保存权威的首次 next_fire_at，然后激活 Timer。
 func (s *TimerService) Activate(id int64) error {
 	def, err := s.defRepo.GetByID(id)
 	if err != nil {
-		return fmt.Errorf("查询定时器失败: %w", err)
+		return fmt.Errorf("get timer: %w", err)
 	}
 	if def == nil {
-		return fmt.Errorf("定时器不存在，id=%d", id)
+		return fmt.Errorf("timer does not exist, id=%d", id)
 	}
 
 	// 验证状态转换合法性
 	if err := model.ValidateTimerTransition(def.Status, model.TimerStatusActive); err != nil {
-		return fmt.Errorf("无法激活定时器: %w", err)
+		return fmt.Errorf("activate timer: %w", err)
 	}
-	location, err := time.LoadLocation(def.Timezone)
+	next, err := s.parser.NextTriggerTime(def.CronExpr, time.Now())
 	if err != nil {
-		return fmt.Errorf("定时器时区无效: %w", err)
+		return fmt.Errorf("calculate next trigger time: %w", err)
 	}
-	next, err := s.parser.NextTriggerTime(def.CronExpr, time.Now().In(location))
-	if err != nil {
-		return fmt.Errorf("计算下一次触发时间失败: %w", err)
-	}
-	nextLocal := next.Local()
 	if err := s.defRepo.UpdateScheduleState(
 		def.ID,
 		model.TimerStatusInactive,
 		model.TimerStatusActive,
-		&nextLocal,
+		&next,
 	); err != nil {
-		return fmt.Errorf("更新定时器激活状态失败: %w", err)
+		return fmt.Errorf("activate timer state: %w", err)
 	}
 	return nil
 }
@@ -200,15 +186,15 @@ func (s *TimerService) Activate(id int64) error {
 func (s *TimerService) Deactivate(id int64) error {
 	def, err := s.defRepo.GetByID(id)
 	if err != nil {
-		return fmt.Errorf("查询定时器失败: %w", err)
+		return fmt.Errorf("get timer: %w", err)
 	}
 	if def == nil {
-		return fmt.Errorf("定时器不存在，id=%d", id)
+		return fmt.Errorf("timer does not exist, id=%d", id)
 	}
 
 	// 验证状态转换合法性
 	if err := model.ValidateTimerTransition(def.Status, model.TimerStatusInactive); err != nil {
-		return fmt.Errorf("无法停用定时器: %w", err)
+		return fmt.Errorf("deactivate timer: %w", err)
 	}
 
 	return s.defRepo.UpdateScheduleState(

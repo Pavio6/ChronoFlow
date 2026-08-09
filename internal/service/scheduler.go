@@ -14,8 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Scheduler turns due timer definitions into durable executions and Outbox
-// events. Redis is intentionally absent from this component.
+// Scheduler 将到期 Timer 转换为持久化 Execution 和 Outbox 事件，不直接依赖 Redis。
 type Scheduler struct {
 	repo     repository.DueTimerRepository
 	parser   *cron.CronParser
@@ -24,6 +23,7 @@ type Scheduler struct {
 	now      func() time.Time
 }
 
+// NewScheduler 创建以 MySQL 为权威数据源的定时调度器。
 func NewScheduler(
 	repo repository.DueTimerRepository,
 	parser *cron.CronParser,
@@ -39,6 +39,7 @@ func NewScheduler(
 	}
 }
 
+// Start 按配置的轮询间隔扫描并调度到期 Timer。
 func (s *Scheduler) Start(ctx context.Context) {
 	logger.Info("Scheduler started",
 		zap.Int("poll_interval_ms", s.cfg.PollIntervalMS),
@@ -59,6 +60,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 	}
 }
 
+// schedule 执行一次到期 Timer 领取、Execution 创建与指标上报。
 func (s *Scheduler) schedule(ctx context.Context) {
 	start := time.Now()
 	now := s.now()
@@ -85,6 +87,7 @@ func (s *Scheduler) schedule(ctx context.Context) {
 	}
 }
 
+// resolveTimer 根据 Cron 和错过触发策略生成本轮触发点及新的 next_fire_at。
 func (s *Scheduler) resolveTimer(
 	definition *model.TimerDefinition,
 	now time.Time,
@@ -92,23 +95,9 @@ func (s *Scheduler) resolveTimer(
 	if definition.NextFireAt == nil {
 		return nil, time.Time{}, fmt.Errorf("ACTIVE timer has an empty next_fire_at")
 	}
-	timezone := definition.Timezone
-	if timezone == "" {
-		timezone = time.Local.String()
-	}
-	location, err := time.LoadLocation(timezone)
-	if err != nil {
-		return nil, time.Time{}, fmt.Errorf("load timezone %q: %w", timezone, err)
-	}
-
-	current := definition.NextFireAt.In(location)
-	nowLocal := now.In(location)
+	current := *definition.NextFireAt
 	nextAfter := func(from time.Time) (time.Time, error) {
-		next, err := s.parser.NextTriggerTime(definition.CronExpr, from)
-		if err != nil {
-			return time.Time{}, err
-		}
-		return next.In(location), nil
+		return s.parser.NextTriggerTime(definition.CronExpr, from)
 	}
 
 	grace := time.Duration(s.cfg.MisfireGraceSeconds) * time.Second
@@ -123,22 +112,22 @@ func (s *Scheduler) resolveTimer(
 		if err != nil {
 			return nil, time.Time{}, err
 		}
-		return []time.Time{current.Local()}, next.Local(), nil
+		return []time.Time{current}, next, nil
 	}
 
 	switch policy {
 	case model.MisfirePolicySkip:
-		next, err := nextAfter(nowLocal)
+		next, err := nextAfter(now)
 		if err != nil {
 			return nil, time.Time{}, err
 		}
-		return nil, next.Local(), nil
+		return nil, next, nil
 	case model.MisfirePolicyFireOnce:
-		next, err := nextAfter(nowLocal)
+		next, err := nextAfter(now)
 		if err != nil {
 			return nil, time.Time{}, err
 		}
-		return []time.Time{current.Local()}, next.Local(), nil
+		return []time.Time{current}, next, nil
 	case model.MisfirePolicyCatchUp:
 		limit := definition.MaxCatchUp
 		if limit < 1 {
@@ -146,14 +135,15 @@ func (s *Scheduler) resolveTimer(
 		}
 		occurrences := make([]time.Time, 0, limit)
 		cursor := current
-		for !cursor.After(nowLocal) && len(occurrences) < limit {
-			occurrences = append(occurrences, cursor.Local())
-			cursor, err = nextAfter(cursor)
+		for !cursor.After(now) && len(occurrences) < limit {
+			occurrences = append(occurrences, cursor)
+			next, err := nextAfter(cursor)
 			if err != nil {
 				return nil, time.Time{}, err
 			}
+			cursor = next
 		}
-		return occurrences, cursor.Local(), nil
+		return occurrences, cursor, nil
 	default:
 		return nil, time.Time{}, fmt.Errorf("unknown misfire policy: %s", policy)
 	}
