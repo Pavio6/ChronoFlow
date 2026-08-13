@@ -1,119 +1,127 @@
-import React, { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Button,
   Descriptions,
+  Drawer,
   Empty,
   Input,
   message,
-  Modal,
   Select,
-  Space,
+  Skeleton,
   Table,
   Tag,
   Tooltip,
 } from 'antd';
-import {
-  CheckCircleOutlined,
-  ClockCircleOutlined,
-  CloseCircleOutlined,
-  EyeOutlined,
-  ReloadOutlined,
-  SearchOutlined,
-  SyncOutlined,
-} from '@ant-design/icons';
-import type { ColumnsType } from 'antd/es/table';
-import type {
-  ExecutionListParams,
-  ExecutionStatus,
-  TimerExecution,
-} from '../types';
-import { getExecutions } from '../api/executions';
+import { CopyOutlined, EyeOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons';
+import type { TableProps } from 'antd';
+import LoadError from '../components/LoadError';
+import { getExecution, getExecutions } from '../api/executions';
+import type { ExecutionListParams, ExecutionStatus, TimerExecution } from '../types';
 import { EXECUTION_STATUS_CONFIG } from '../utils/constants';
+import { formatDateTime } from '../utils/date';
+import {
+  getExecutionListCache,
+  hasFreshExecutionListCache,
+  saveExecutionListCache,
+} from '../utils/pageCache';
 
-const statusIcon: Partial<Record<ExecutionStatus, React.ReactNode>> = {
-  SUCCESS: <CheckCircleOutlined className="success-text" />,
-  FAILED: <CloseCircleOutlined className="danger-text" />,
-  RUNNING: <SyncOutlined spin className="info-text" />,
-  PENDING: <ClockCircleOutlined className="muted" />,
-  RETRY_WAIT: <ClockCircleOutlined className="muted" />,
-};
-
-const formatTime = (value: string | null) =>
-  value ? new Date(value).toLocaleString('zh-CN') : '-';
-
-const ExecutionList: React.FC = () => {
-  const [loading, setLoading] = useState(true);
-  const [executions, setExecutions] = useState<TimerExecution[]>([]);
-  const [total, setTotal] = useState(0);
-  const [params, setParams] = useState<ExecutionListParams>({
-    page: 1,
-    page_size: 10,
-  });
-  const [selected, setSelected] = useState<TimerExecution | null>(null);
-  const [refreshToken, setRefreshToken] = useState(0);
-  const [stats, setStats] = useState({
-    total: 0,
-    success: 0,
-    failed: 0,
-    running: 0,
-  });
+const ExecutionList = () => {
+  const cachedList = getExecutionListCache();
+  const [executions, setExecutions] = useState<TimerExecution[]>(() => cachedList?.data.items ?? []);
+  const [total, setTotal] = useState(() => cachedList?.data.total ?? 0);
+  const [loading, setLoading] = useState(() => cachedList === null);
+  const [error, setError] = useState('');
+  const [params, setParams] = useState<ExecutionListParams>(
+    () => cachedList?.params ?? { page: 1, page_size: 20 },
+  );
+  const [timerName, setTimerName] = useState(() => cachedList?.params.timer_name ?? '');
+  const [reloadKey, setReloadKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detail, setDetail] = useState<TimerExecution | null>(null);
 
   useEffect(() => {
-    let cancelled = false;
-    getExecutions(params).then((result) => {
-      if (cancelled) return;
-      setExecutions(result.items || []);
-      setTotal(result.total);
-      setStats({
-        total: result.total,
-        success: result.stats.SUCCESS || 0,
-        failed: result.stats.FAILED || 0,
-        running: result.stats.RUNNING || 0,
+    const timer = window.setTimeout(() => {
+      const nextName = timerName.trim();
+      if ((params.timer_name ?? '') === nextName) return;
+      setLoading(true);
+      setError('');
+      setParams((current) => ({ ...current, timer_name: nextName || undefined, page: 1 }));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [params.timer_name, timerName]);
+
+  useEffect(() => {
+    if (reloadKey === 0 && hasFreshExecutionListCache(params)) {
+      return;
+    }
+
+    const controller = new AbortController();
+    getExecutions(params, controller.signal)
+      .then((result) => {
+        setExecutions(result.items ?? []);
+        setTotal(result.total);
+        saveExecutionListCache(result, params);
+      })
+      .catch((requestError: Error) => {
+        if (!controller.signal.aborted) setError(requestError.message || '无法加载执行记录');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setRefreshing(false);
+        }
       });
-    }).catch((error: unknown) => {
-      if (cancelled) return;
-      message.error((error as Error).message || '加载失败');
-    }).finally(() => {
-      if (!cancelled) setLoading(false);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [params, refreshToken]);
+    return () => controller.abort();
+  }, [params, reloadKey]);
 
-  const updateParams = (next: ExecutionListParams) => {
-    setLoading(true);
-    setParams(next);
-  };
+  const refresh = useCallback(() => {
+    setError('');
+    setRefreshing(true);
+    setReloadKey((current) => current + 1);
+  }, []);
 
-  const refresh = () => {
-    setLoading(true);
-    setRefreshToken((current) => current + 1);
-  };
+  const openDetail = useCallback(async (id: number) => {
+    setDetailOpen(true);
+    setDetail(null);
+    setDetailLoading(true);
+    try {
+      setDetail(await getExecution(id));
+    } catch (requestError) {
+      message.error((requestError as Error).message || '无法加载执行详情');
+      setDetailOpen(false);
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
 
-  const columns: ColumnsType<TimerExecution> = [
+  const copyText = useCallback(async (value: string) => {
+    try {
+      await navigator.clipboard.writeText(value);
+      message.success('已复制');
+    } catch {
+      message.error('复制失败，请手动选择文本');
+    }
+  }, []);
+
+  const columns = useMemo<TableProps<TimerExecution>['columns']>(() => [
     {
-      title: 'ID',
-      dataIndex: 'id',
-      width: 72,
-      render: (id: number) => <span className="muted">#{id}</span>,
-    },
-    {
-      title: '定时器名称',
-      dataIndex: 'timer_name',
-      width: 180,
-      ellipsis: true,
-      render: (name: string | undefined, execution) => (
-        <Tooltip title={name || `#${execution.timer_id}`}>
-          <span>{name || `#${execution.timer_id}`}</span>
-        </Tooltip>
+      title: '任务',
+      key: 'timer',
+      width: 220,
+      render: (_, execution) => (
+        <button className="table-primary-link" type="button" onClick={() => openDetail(execution.id)}>
+          <strong>{execution.timer_name || `Timer #${execution.timer_id}`}</strong>
+          <span>Execution #{execution.id}</span>
+        </button>
       ),
     },
     {
-      title: '计划时间',
+      title: '计划触发时间',
       dataIndex: 'scheduled_at',
-      width: 170,
-      render: formatTime,
+      width: 180,
+      render: formatDateTime,
     },
     {
       title: '状态',
@@ -121,148 +129,154 @@ const ExecutionList: React.FC = () => {
       width: 110,
       render: (status: ExecutionStatus) => {
         const config = EXECUTION_STATUS_CONFIG[status];
-        return (
-          <Space size={4}>
-            {statusIcon[status]}
-            <Tag color={config.color} className="status-tag">{config.label}</Tag>
-          </Space>
-        );
+        return <Tag className={`status-tag status-tag-${status.toLowerCase()}`}>{config.label}</Tag>;
       },
     },
     {
-      title: '尝试',
-      width: 72,
-      render: (_, execution) => `${execution.attempt}/${execution.max_attempts}`,
+      title: '尝试次数',
+      key: 'attempt',
+      width: 100,
+      render: (_, execution) => `${execution.attempt} / ${execution.max_attempts}`,
     },
     {
       title: '响应码',
       dataIndex: 'response_code',
-      width: 82,
-      render: (code: number) => code || '-',
+      width: 90,
+      render: (code: number) => code || '—',
     },
     {
       title: '耗时',
       dataIndex: 'duration_ms',
-      width: 90,
-      render: (duration: number) => duration ? `${duration}ms` : '-',
+      width: 100,
+      render: (duration: number) => duration > 0 ? `${duration} ms` : '—',
     },
     {
-      title: '操作',
+      title: '完成时间',
+      dataIndex: 'finished_at',
+      width: 180,
+      render: formatDateTime,
+    },
+    {
+      title: '',
       key: 'action',
-      width: 60,
+      width: 56,
+      fixed: 'right',
       render: (_, execution) => (
-        <Tooltip title="详情">
+        <Tooltip title="查看详情">
           <Button
-            className="icon-button"
             type="text"
-            size="small"
             icon={<EyeOutlined />}
-            onClick={() => setSelected(execution)}
+            aria-label={`查看 Execution ${execution.id}`}
+            onClick={() => void openDetail(execution.id)}
           />
         </Tooltip>
       ),
     },
-  ];
+  ], [openDetail]);
 
-  const detailItems = selected ? [
-    { key: 'id', label: 'Execution ID', children: selected.id },
-    { key: 'timer', label: '定时器', children: selected.timer_name || `#${selected.timer_id}` },
-    { key: 'scheduled', label: '计划时间', children: formatTime(selected.scheduled_at) },
-    {
-      key: 'status',
-      label: '状态',
-      children: (
-        <Tag color={EXECUTION_STATUS_CONFIG[selected.status].color}>
-          {EXECUTION_STATUS_CONFIG[selected.status].label}
-        </Tag>
-      ),
-    },
-    { key: 'attempt', label: '尝试次数', children: `${selected.attempt}/${selected.max_attempts}` },
-    { key: 'next', label: '下次重试', children: formatTime(selected.next_attempt_at) },
-    { key: 'started', label: '开始时间', children: formatTime(selected.started_at) },
-    { key: 'finished', label: '完成时间', children: formatTime(selected.finished_at) },
-    { key: 'code', label: '响应码', children: selected.response_code || '-' },
-    { key: 'duration', label: '耗时', children: selected.duration_ms ? `${selected.duration_ms}ms` : '-' },
-    {
-      key: 'response',
-      label: '响应体',
-      span: 2,
-      children: <pre className="code-block">{selected.response_body || '-'}</pre>,
-    },
-    ...(selected.error_message ? [{
-      key: 'error',
-      label: '错误',
-      span: 2,
-      children: <span className="danger-text">{selected.error_message}</span>,
-    }] : []),
+  const codeContent = (value: string) => (
+    <div className="code-content">
+      <Button
+        type="text"
+        size="small"
+        icon={<CopyOutlined />}
+        aria-label="复制内容"
+        onClick={() => void copyText(value)}
+      />
+      <pre className="code-block">{value}</pre>
+    </div>
+  );
+
+  const detailItems = detail ? [
+    { key: 'id', label: 'Execution ID', children: detail.id },
+    { key: 'timer', label: '定时任务', children: detail.timer_name || `Timer #${detail.timer_id}` },
+    { key: 'status', label: '状态', children: <Tag className={`status-tag status-tag-${detail.status.toLowerCase()}`}>{EXECUTION_STATUS_CONFIG[detail.status].label}</Tag> },
+    { key: 'attempt', label: '尝试次数', children: `${detail.attempt} / ${detail.max_attempts}` },
+    { key: 'scheduled', label: '计划触发', children: formatDateTime(detail.scheduled_at) },
+    { key: 'next', label: '下次重试', children: formatDateTime(detail.next_attempt_at) },
+    { key: 'started', label: '开始时间', children: formatDateTime(detail.started_at) },
+    { key: 'finished', label: '完成时间', children: formatDateTime(detail.finished_at) },
+    { key: 'code', label: '响应码', children: detail.response_code || '—' },
+    { key: 'duration', label: '执行耗时', children: detail.duration_ms > 0 ? `${detail.duration_ms} ms` : '—' },
+    { key: 'created', label: '创建时间', children: formatDateTime(detail.created_at) },
+    { key: 'updated', label: '更新时间', children: formatDateTime(detail.updated_at) },
+    ...(detail.response_body ? [{ key: 'response', label: '响应内容', children: codeContent(detail.response_body) }] : []),
+    ...(detail.error_message ? [{ key: 'error', label: '错误信息', children: codeContent(detail.error_message) }] : []),
   ] : [];
 
   return (
     <div className="page-stack">
-      <div className="metric-grid four">
-        <div className="metric-tile"><span>总计</span><strong>{stats.total}</strong></div>
-        <div className="metric-tile"><span>成功</span><strong className="success-text">{stats.success}</strong></div>
-        <div className="metric-tile"><span>失败</span><strong className="danger-text">{stats.failed}</strong></div>
-        <div className="metric-tile"><span>运行中</span><strong>{stats.running}</strong></div>
-      </div>
-
-      <div className="surface">
+      {error && <LoadError message={error} onRetry={refresh} />}
+      <section className="surface" aria-label="执行记录列表">
         <div className="toolbar">
-          <Space wrap>
+          <div className="toolbar-filters">
             <Input
-              placeholder="搜索定时器名称"
+              value={timerName}
+              placeholder="搜索任务名称"
               prefix={<SearchOutlined />}
-              className="toolbar-control"
               allowClear
-              onChange={(event) => updateParams({
-                ...params,
-                timer_name: event.target.value,
-                page: 1,
-              })}
+              onChange={(event) => setTimerName(event.target.value)}
+              className="toolbar-search"
             />
             <Select
-              placeholder="状态"
-              className="toolbar-select"
+              value={params.status}
+              placeholder="全部状态"
               allowClear
-              onChange={(status) => updateParams({ ...params, status, page: 1 })}
+              onChange={(status) => {
+                setLoading(true);
+                setError('');
+                setParams((current) => ({ ...current, status, page: 1 }));
+              }}
               options={Object.entries(EXECUTION_STATUS_CONFIG).map(([value, config]) => ({
-                label: config.label,
                 value,
+                label: config.label,
               }))}
+              className="toolbar-select"
             />
-          </Space>
-          <Button icon={<ReloadOutlined />} onClick={refresh}>刷新</Button>
+          </div>
+          <Tooltip title="刷新">
+            <Button icon={<ReloadOutlined />} onClick={refresh} loading={refreshing}>
+              刷新
+            </Button>
+          </Tooltip>
         </div>
 
-        <Table
+        <Table<TimerExecution>
           columns={columns}
           dataSource={executions}
           rowKey="id"
           loading={loading}
-          size="middle"
-          scroll={{ x: 900 }}
+          scroll={{ x: 1040 }}
           pagination={{
             current: params.page,
             pageSize: params.page_size,
             total,
             showSizeChanger: true,
+            pageSizeOptions: [10, 20, 50],
             showTotal: (count) => `共 ${count} 条`,
-            onChange: (page, pageSize) => updateParams({ ...params, page, page_size: pageSize }),
+            onChange: (page, pageSize) => {
+              setLoading(true);
+              setError('');
+              setParams((current) => ({ ...current, page, page_size: pageSize }));
+            },
           }}
-          locale={{ emptyText: <Empty description="暂无数据" /> }}
+          locale={{ emptyText: !loading && <Empty description="没有符合条件的执行记录" /> }}
         />
-      </div>
+      </section>
 
-      <Modal
+      <Drawer
         title="执行详情"
-        open={selected !== null}
-        onCancel={() => setSelected(null)}
-        footer={null}
-        width={700}
-        className="detail-modal"
+        open={detailOpen}
+        size={560}
+        onClose={() => setDetailOpen(false)}
+        destroyOnHidden
       >
-        {selected && <Descriptions bordered column={2} size="small" items={detailItems} />}
-      </Modal>
+        {detailLoading ? (
+          <Skeleton active paragraph={{ rows: 10 }} />
+        ) : (
+          <Descriptions column={1} size="small" items={detailItems} className="detail-list" />
+        )}
+      </Drawer>
     </div>
   );
 };

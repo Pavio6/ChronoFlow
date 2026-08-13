@@ -1,180 +1,324 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Table,
   Button,
-  Space,
-  Tag,
-  Input,
-  Select,
-  message,
-  Popconfirm,
-  Tooltip,
+  Descriptions,
+  Drawer,
+  Dropdown,
   Empty,
+  Input,
+  message,
+  Modal,
+  Select,
+  Skeleton,
+  Table,
+  Tag,
+  Tooltip,
 } from 'antd';
 import {
-  PlusOutlined,
-  SearchOutlined,
-  PlayCircleOutlined,
-  PauseCircleOutlined,
   DeleteOutlined,
+  EyeOutlined,
+  MoreOutlined,
+  PauseCircleOutlined,
+  PlayCircleOutlined,
   ReloadOutlined,
+  SearchOutlined,
 } from '@ant-design/icons';
-import { useNavigate } from 'react-router-dom';
-import type { ColumnsType } from 'antd/es/table';
-import type { TimerDefinition, TimerStatus, TimerListParams } from '../types';
-import { getTimers, deleteTimer, activateTimer, deactivateTimer } from '../api/tasks';
+import type { MenuProps, TableProps } from 'antd';
+import LoadError from '../components/LoadError';
+import type { TimerDefinition, TimerListParams, TimerStatus } from '../types';
+import { activateTimer, deactivateTimer, deleteTimer, getTimer, getTimers } from '../api/tasks';
 import { TIMER_STATUS_CONFIG } from '../utils/constants';
+import { formatDateTime } from '../utils/date';
+import {
+  getTimerListCache,
+  hasFreshTimerListCache,
+  saveTimerListCache,
+} from '../utils/pageCache';
 
-const TaskList: React.FC = () => {
-  const navigate = useNavigate();
-  const [loading, setLoading] = useState(false);
-  const [timers, setTimers] = useState<TimerDefinition[]>([]);
-  const [total, setTotal] = useState(0);
-  const [params, setParams] = useState<TimerListParams>({ page: 1, page_size: 10 });
-  const [stats, setStats] = useState({ total: 0, active: 0, inactive: 0 });
-
-  const loadTimers = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await getTimers(params);
-      const items = res.items || [];
-      setTimers(items);
-      setTotal(res.total);
-      setStats(res.stats);
-    } catch (error: unknown) {
-      message.error((error as Error).message || '加载失败');
-    } finally {
-      setLoading(false);
-    }
-  }, [params]);
+const TaskList = () => {
+  const cachedList = getTimerListCache();
+  const [timers, setTimers] = useState<TimerDefinition[]>(() => cachedList?.data.items ?? []);
+  const [total, setTotal] = useState(() => cachedList?.data.total ?? 0);
+  const [loading, setLoading] = useState(() => cachedList === null);
+  const [error, setError] = useState('');
+  const [params, setParams] = useState<TimerListParams>(
+    () => cachedList?.params ?? { page: 1, page_size: 20 },
+  );
+  const [keyword, setKeyword] = useState(() => cachedList?.params.keyword ?? '');
+  const [appFilter, setAppFilter] = useState(() => cachedList?.params.app ?? '');
+  const [reloadKey, setReloadKey] = useState(0);
+  const [refreshing, setRefreshing] = useState(false);
+  const [pendingTimerId, setPendingTimerId] = useState<number | null>(null);
+  const [detailOpen, setDetailOpen] = useState(false);
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detail, setDetail] = useState<TimerDefinition | null>(null);
 
   useEffect(() => {
-    const run = async () => { await loadTimers(); };
-    run();
-  }, [loadTimers]);
+    const timer = window.setTimeout(() => {
+      const nextKeyword = keyword.trim();
+      const nextApp = appFilter.trim();
+      if ((params.keyword ?? '') === nextKeyword && (params.app ?? '') === nextApp) return;
+      setLoading(true);
+      setError('');
+      setParams((current) => ({
+        ...current,
+        keyword: nextKeyword || undefined,
+        app: nextApp || undefined,
+        page: 1,
+      }));
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [appFilter, keyword, params.app, params.keyword]);
 
-  const handleAction = async (action: () => Promise<unknown>, msg: string) => {
-    try {
-      await action();
-      message.success(msg);
-      loadTimers();
-    } catch (error: unknown) {
-      message.error((error as Error).message || '操作失败');
+  useEffect(() => {
+    if (reloadKey === 0 && hasFreshTimerListCache(params)) {
+      return;
     }
-  };
 
-  const columns: ColumnsType<TimerDefinition> = [
-    { title: 'ID', dataIndex: 'id', width: 72, render: (id: number) => <span className="muted">#{id}</span> },
-    { title: '应用', dataIndex: 'app', width: 140, render: (app: string) => <span className="mono-chip">{app}</span> },
-    { title: '名称', dataIndex: 'name', width: 180, ellipsis: true, render: (name: string) => <strong>{name}</strong> },
+    const controller = new AbortController();
+    getTimers(params, controller.signal)
+      .then((result) => {
+        setTimers(result.items ?? []);
+        setTotal(result.total);
+        saveTimerListCache(result, params);
+      })
+      .catch((requestError: Error) => {
+        if (!controller.signal.aborted) setError(requestError.message || '无法加载定时任务');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setLoading(false);
+          setRefreshing(false);
+        }
+      });
+    return () => controller.abort();
+  }, [params, reloadKey]);
+
+  const refresh = useCallback(() => {
+    setError('');
+    setRefreshing(true);
+    setReloadKey((current) => current + 1);
+  }, []);
+
+  const openDetail = useCallback(async (id: number) => {
+    setDetailOpen(true);
+    setDetail(null);
+    setDetailLoading(true);
+    try {
+      setDetail(await getTimer(id));
+    } catch (requestError) {
+      message.error((requestError as Error).message || '无法加载任务详情');
+      setDetailOpen(false);
+    } finally {
+      setDetailLoading(false);
+    }
+  }, []);
+
+  const runAction = useCallback(async (
+    timer: TimerDefinition,
+    action: 'activate' | 'deactivate' | 'delete',
+  ) => {
+    setPendingTimerId(timer.id);
+    try {
+      if (action === 'activate') await activateTimer(timer.id);
+      if (action === 'deactivate') await deactivateTimer(timer.id);
+      if (action === 'delete') await deleteTimer(timer.id);
+      message.success(action === 'activate' ? '任务已启用' : action === 'deactivate' ? '任务已停用' : '任务已删除');
+      refresh();
+    } catch (requestError) {
+      message.error((requestError as Error).message || '操作失败');
+    } finally {
+      setPendingTimerId(null);
+    }
+  }, [refresh]);
+
+  const confirmDelete = useCallback((timer: TimerDefinition) => {
+    Modal.confirm({
+      title: '删除定时任务',
+      content: `确定删除“${timer.name}”吗？删除后不能恢复`,
+      okText: '删除',
+      cancelText: '取消',
+      okButtonProps: { danger: true },
+      onOk: () => runAction(timer, 'delete'),
+    });
+  }, [runAction]);
+
+  const columns = useMemo<TableProps<TimerDefinition>['columns']>(() => [
     {
-      title: 'Cron',
+      title: '任务',
+      key: 'task',
+      width: 240,
+      render: (_, timer) => (
+        <button className="table-primary-link" type="button" onClick={() => openDetail(timer.id)}>
+          <strong>{timer.name}</strong>
+          <span>{timer.app}</span>
+        </button>
+      ),
+    },
+    {
+      title: '触发计划',
       dataIndex: 'cron_expr',
-      width: 140,
-      render: (text: string) => <code className="inline-code">{text}</code>,
+      width: 150,
+      render: (cron: string) => <code className="inline-code">{cron}</code>,
     },
     {
-      title: '下次触发',
+      title: '下一次触发',
       dataIndex: 'next_fire_at',
-      width: 170,
-      render: (value: string | null) => value ? new Date(value).toLocaleString('zh-CN') : '-',
+      width: 180,
+      render: formatDateTime,
     },
-    { title: '回调地址', dataIndex: 'callback_url', width: 220, ellipsis: true },
+    {
+      title: '错过策略',
+      dataIndex: 'misfire_policy',
+      width: 120,
+      render: (policy: TimerDefinition['misfire_policy']) => (
+        <span className="secondary-value">{policy.replace('_', ' ')}</span>
+      ),
+    },
     {
       title: '状态',
       dataIndex: 'status',
-      width: 80,
+      width: 100,
       render: (status: TimerStatus) => {
         const config = TIMER_STATUS_CONFIG[status];
-        return <Tag color={config?.color} className="status-tag">{config?.label || status}</Tag>;
+        return <Tag className={`status-tag status-tag-${status.toLowerCase()}`}>{config.label}</Tag>;
       },
     },
     {
-      title: '操作',
-      key: 'action',
-      width: 140,
-      render: (_, record) => (
-        <Space size={4}>
-          {record.status === 'ACTIVE' ? (
-            <Tooltip title="停用">
-              <Button className="icon-button" type="text" size="small" icon={<PauseCircleOutlined />}
-                onClick={() => handleAction(() => deactivateTimer(record.id), '停用成功')} />
+      title: '',
+      key: 'actions',
+      width: 56,
+      fixed: 'right',
+      render: (_, timer) => {
+        const actionItems: MenuProps['items'] = [
+          { key: 'view', icon: <EyeOutlined />, label: '查看详情' },
+          timer.status === 'ACTIVE'
+            ? { key: 'deactivate', icon: <PauseCircleOutlined />, label: '停用任务' }
+            : { key: 'activate', icon: <PlayCircleOutlined />, label: '启用任务' },
+          { type: 'divider' },
+          { key: 'delete', icon: <DeleteOutlined />, label: '删除任务', danger: true },
+        ];
+        return (
+          <Dropdown
+            trigger={['click']}
+            menu={{
+              items: actionItems,
+              onClick: ({ key }) => {
+                if (key === 'view') void openDetail(timer.id);
+                if (key === 'activate') void runAction(timer, 'activate');
+                if (key === 'deactivate') void runAction(timer, 'deactivate');
+                if (key === 'delete') confirmDelete(timer);
+              },
+            }}
+          >
+            <Tooltip title="更多操作">
+              <Button
+                type="text"
+                icon={<MoreOutlined />}
+                loading={pendingTimerId === timer.id}
+                aria-label={`${timer.name}的更多操作`}
+              />
             </Tooltip>
-          ) : record.status === 'INACTIVE' ? (
-            <Tooltip title="激活">
-              <Button className="icon-button" type="text" size="small" icon={<PlayCircleOutlined />}
-                onClick={() => handleAction(() => activateTimer(record.id), '激活成功')} />
-            </Tooltip>
-          ) : null}
-          <Popconfirm title="确定删除？" onConfirm={() => handleAction(() => deleteTimer(record.id), '删除成功')}>
-            <Tooltip title="删除">
-              <Button className="icon-button" type="text" size="small" danger icon={<DeleteOutlined />} />
-            </Tooltip>
-          </Popconfirm>
-        </Space>
-      ),
+          </Dropdown>
+        );
+      },
     },
-  ];
+  ], [confirmDelete, openDetail, pendingTimerId, runAction]);
+
+  const detailItems = detail ? [
+    { key: 'name', label: '名称', children: detail.name },
+    { key: 'app', label: '应用', children: detail.app },
+    { key: 'status', label: '状态', children: <Tag className={`status-tag status-tag-${detail.status.toLowerCase()}`}>{TIMER_STATUS_CONFIG[detail.status].label}</Tag> },
+    { key: 'cron', label: 'Cron', children: <code className="inline-code">{detail.cron_expr}</code> },
+    { key: 'next', label: '下次触发', children: formatDateTime(detail.next_fire_at) },
+    { key: 'policy', label: '错过策略', children: detail.misfire_policy },
+    { key: 'catchup', label: '补偿上限', children: detail.max_catch_up },
+    { key: 'method', label: '回调方法', children: detail.callback_method },
+    { key: 'url', label: '回调地址', children: <span className="breakable-value">{detail.callback_url}</span> },
+    { key: 'body', label: '请求体', children: <pre className="code-block">{detail.callback_body || '—'}</pre> },
+    { key: 'created', label: '创建时间', children: formatDateTime(detail.created_at) },
+    { key: 'updated', label: '更新时间', children: formatDateTime(detail.updated_at) },
+  ] : [];
 
   return (
     <div className="page-stack">
-      <div className="metric-grid three">
-        <div className="metric-tile">
-          <span>总计</span>
-          <strong>{stats.total}</strong>
-        </div>
-        <div className="metric-tile">
-          <span>已激活</span>
-          <strong className="success-text">{stats.active}</strong>
-        </div>
-        <div className="metric-tile">
-          <span>未激活</span>
-          <strong>{stats.inactive}</strong>
-        </div>
-      </div>
-
-      <div className="surface">
+      {error && <LoadError message={error} onRetry={refresh} />}
+      <section className="surface" aria-label="定时任务列表">
         <div className="toolbar">
-          <Space wrap>
-          <Input
-            placeholder="搜索名称"
-            prefix={<SearchOutlined />}
-            className="toolbar-control"
-            onChange={(e) => setParams({ ...params, keyword: e.target.value, page: 1 })}
-            allowClear
-          />
-          <Select
-            placeholder="状态"
-            className="toolbar-select"
-            allowClear
-            onChange={(value) => setParams({ ...params, status: value, page: 1 })}
-            options={Object.entries(TIMER_STATUS_CONFIG).map(([k, v]) => ({ label: v.label, value: k }))}
-          />
-          </Space>
-          <Space>
-          <Button icon={<ReloadOutlined />} onClick={loadTimers}>刷新</Button>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => navigate('/tasks/create')}>创建</Button>
-          </Space>
+          <div className="toolbar-filters">
+            <Input
+              value={keyword}
+              placeholder="搜索任务名称"
+              prefix={<SearchOutlined />}
+              allowClear
+              onChange={(event) => setKeyword(event.target.value)}
+              className="toolbar-search"
+            />
+            <Input
+              value={appFilter}
+              placeholder="筛选应用"
+              allowClear
+              onChange={(event) => setAppFilter(event.target.value)}
+              className="toolbar-app"
+            />
+            <Select
+              value={params.status}
+              placeholder="全部状态"
+              allowClear
+              onChange={(status) => {
+                setLoading(true);
+                setError('');
+                setParams((current) => ({ ...current, status, page: 1 }));
+              }}
+              options={Object.entries(TIMER_STATUS_CONFIG)
+                .filter(([status]) => status !== 'DELETED')
+                .map(([value, config]) => ({ value, label: config.label }))}
+              className="toolbar-select"
+            />
+          </div>
+          <Tooltip title="刷新">
+            <Button icon={<ReloadOutlined />} onClick={refresh} loading={refreshing}>
+              刷新
+            </Button>
+          </Tooltip>
         </div>
 
-        <Table
+        <Table<TimerDefinition>
           columns={columns}
           dataSource={timers}
           rowKey="id"
           loading={loading}
-          size="middle"
-          scroll={{ x: 1280 }}
+          scroll={{ x: 900 }}
           pagination={{
             current: params.page,
             pageSize: params.page_size,
             total,
             showSizeChanger: true,
-            showTotal: (t) => `共 ${t} 条`,
-            onChange: (p, ps) => setParams({ ...params, page: p, page_size: ps }),
+            pageSizeOptions: [10, 20, 50],
+            showTotal: (count) => `共 ${count} 条`,
+            onChange: (page, pageSize) => {
+              setLoading(true);
+              setError('');
+              setParams((current) => ({ ...current, page, page_size: pageSize }));
+            },
           }}
-          locale={{ emptyText: <Empty description="暂无数据" /> }}
+          locale={{ emptyText: !loading && <Empty description="没有符合条件的定时任务" /> }}
         />
-      </div>
+      </section>
+
+      <Drawer
+        title="任务详情"
+        open={detailOpen}
+        size={520}
+        onClose={() => setDetailOpen(false)}
+        destroyOnHidden
+      >
+        {detailLoading ? (
+          <Skeleton active paragraph={{ rows: 9 }} />
+        ) : (
+          <Descriptions column={1} size="small" items={detailItems} className="detail-list" />
+        )}
+      </Drawer>
     </div>
   );
 };

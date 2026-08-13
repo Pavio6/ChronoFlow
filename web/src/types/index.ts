@@ -95,6 +95,7 @@ export interface TimerListParams {
 export interface ExecutionListParams {
   page?: number;
   page_size?: number;
+  timer_id?: number;
   timer_name?: string;
   status?: ExecutionStatus;
 }
