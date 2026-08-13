@@ -48,23 +48,21 @@ chronoflow-all                # 组合运行模式
 
 服务端开发要求 Go 1.26.2+ 与 Docker Compose；前端开发要求 Node.js 22+。
 
-本地首次启动时，先启动基础依赖并执行迁移：
+本地开发时，在一个终端启动完整后端：
 
 ```bash
-make dev-start
-make migrate-up
+make dev-backend
 ```
 
-然后在不同终端启动全部独立角色：
+它会依次启动 Docker 基础依赖、执行待应用的数据库迁移，并以组合运行模式启动 API、Scheduler、Dispatcher 和 Worker。
+
+在另一个终端启动前端开发服务器：
 
 ```bash
-make dev-api
-make dev-scheduler
-make dev-dispatcher
-make dev-worker
+make dev-frontend
 ```
 
-Docker Compose 启动 MySQL、Redis、Prometheus 和 Grafana。`make migrate-up` 执行版本化数据库迁移。
+Docker Compose 启动 MySQL、Redis、Prometheus 和 Grafana。前端开发服务器会将 `/api` 请求代理至 API 角色的 `http://localhost:8080`。
 
 服务地址：
 
@@ -75,13 +73,20 @@ Docker Compose 启动 MySQL、Redis、Prometheus 和 Grafana。`make migrate-up`
 - Prometheus：`http://localhost:9090`
 - Grafana：`http://localhost:3001`
 
-组合运行模式：
+如需分别调试每个后端角色，先手动启动基础依赖并执行迁移：
 
 ```bash
-make dev-start
-make migrate-up
-make dev-app
-make dev-frontend
+docker compose up -d mysql redis prometheus grafana
+go run ./cmd/migrate up
+```
+
+再在不同终端分别运行：
+
+```bash
+make dev-api
+make dev-scheduler
+make dev-dispatcher
+make dev-worker
 ```
 
 ## 构建与测试
@@ -197,7 +202,6 @@ migrations/
 常用命令：
 
 ```bash
-make migrate-up
 make migrate-version
 make migrate-down STEPS=1
 
