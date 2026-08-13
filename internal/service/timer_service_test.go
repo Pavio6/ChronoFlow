@@ -16,7 +16,7 @@ type stubDefinitionRepo struct {
 	transitionNext *time.Time
 }
 
-// Create 为测试替身或测试辅助代码提供所需行为。
+// Create 为测试替身或测试辅助代码提供所需行为
 func (r *stubDefinitionRepo) Create(def *model.TimerDefinition) error {
 	r.def = def
 	if r.def.ID == 0 {
@@ -25,29 +25,29 @@ func (r *stubDefinitionRepo) Create(def *model.TimerDefinition) error {
 	return nil
 }
 
-// GetByID 为测试替身或测试辅助代码提供所需行为。
+// GetByID 为测试替身或测试辅助代码提供所需行为
 func (r *stubDefinitionRepo) GetByID(int64) (*model.TimerDefinition, error) {
 	return r.def, nil
 }
 
-// Delete 为测试替身或测试辅助代码提供所需行为。
+// Delete 为测试替身或测试辅助代码提供所需行为
 func (r *stubDefinitionRepo) Delete(int64) error { return nil }
 
-// List 为测试替身或测试辅助代码提供所需行为。
+// List 为测试替身或测试辅助代码提供所需行为
 func (r *stubDefinitionRepo) List(
 	*model.TimerDefinitionListRequest,
 ) ([]*model.TimerDefinition, int64, error) {
 	return nil, 0, nil
 }
 
-// CountListByStatus 为测试替身或测试辅助代码提供所需行为。
+// CountListByStatus 为测试替身或测试辅助代码提供所需行为
 func (r *stubDefinitionRepo) CountListByStatus(
 	*model.TimerDefinitionListRequest,
 ) (map[model.TimerStatus]int64, error) {
 	return map[model.TimerStatus]int64{}, nil
 }
 
-// UpdateScheduleState 为测试替身或测试辅助代码提供所需行为。
+// UpdateScheduleState 为测试替身或测试辅助代码提供所需行为
 func (r *stubDefinitionRepo) UpdateScheduleState(
 	_ int64,
 	from model.TimerStatus,
@@ -62,12 +62,12 @@ func (r *stubDefinitionRepo) UpdateScheduleState(
 	return nil
 }
 
-// CountByStatus 为测试替身或测试辅助代码提供所需行为。
+// CountByStatus 为测试替身或测试辅助代码提供所需行为
 func (r *stubDefinitionRepo) CountByStatus() (map[model.TimerStatus]int64, error) {
 	return map[model.TimerStatus]int64{}, nil
 }
 
-// newTimerService 为测试替身或测试辅助代码提供所需行为。
+// newTimerService 为测试替身或测试辅助代码提供所需行为
 func newTimerService(repo *stubDefinitionRepo) *TimerService {
 	return NewTimerService(
 		repo,
@@ -79,7 +79,7 @@ func newTimerService(repo *stubDefinitionRepo) *TimerService {
 	)
 }
 
-// TestTimerServiceCreateDefaults 验证对应的测试场景。
+// TestTimerServiceCreateDefaults 验证对应的测试场景
 func TestTimerServiceCreateDefaults(t *testing.T) {
 	repo := &stubDefinitionRepo{}
 	timerService := newTimerService(repo)
@@ -102,7 +102,7 @@ func TestTimerServiceCreateDefaults(t *testing.T) {
 	}
 }
 
-// TestTimerServiceRejectsImpossibleCron 验证对应的测试场景。
+// TestTimerServiceRejectsImpossibleCron 验证对应的测试场景
 func TestTimerServiceRejectsImpossibleCron(t *testing.T) {
 	repo := &stubDefinitionRepo{}
 	timerService := newTimerService(repo)
@@ -119,7 +119,7 @@ func TestTimerServiceRejectsImpossibleCron(t *testing.T) {
 	}
 }
 
-// TestTimerServiceActivationAndDeactivation 验证对应的测试场景。
+// TestTimerServiceActivationAndDeactivation 验证对应的测试场景
 func TestTimerServiceActivationAndDeactivation(t *testing.T) {
 	repo := &stubDefinitionRepo{
 		def: &model.TimerDefinition{

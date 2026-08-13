@@ -18,7 +18,7 @@ type stubRecoveryRepo struct {
 	cleanupCalls  int
 }
 
-// RecoverBatch 为测试替身或测试辅助代码提供所需行为。
+// RecoverBatch 为测试替身或测试辅助代码提供所需行为
 func (r *stubRecoveryRepo) RecoverBatch(
 	context.Context, time.Time, time.Time, int,
 ) (repository.RecoveryResult, error) {
@@ -26,7 +26,7 @@ func (r *stubRecoveryRepo) RecoverBatch(
 	return r.result, nil
 }
 
-// Cleanup 为测试替身或测试辅助代码提供所需行为。
+// Cleanup 为测试替身或测试辅助代码提供所需行为
 func (r *stubRecoveryRepo) Cleanup(
 	context.Context, time.Time, time.Time, int,
 ) (repository.CleanupResult, error) {
@@ -38,28 +38,28 @@ type stubReconcilerExecutionRepo struct {
 	states map[model.ExecutionStatus]int64
 }
 
-// Claim 为测试替身或测试辅助代码提供所需行为。
+// Claim 为测试替身或测试辅助代码提供所需行为
 func (r *stubReconcilerExecutionRepo) Claim(
 	context.Context, int64, string, string, time.Time, time.Duration,
 ) (*model.TimerExecution, bool, error) {
 	return nil, false, nil
 }
 
-// Heartbeat 为测试替身或测试辅助代码提供所需行为。
+// Heartbeat 为测试替身或测试辅助代码提供所需行为
 func (r *stubReconcilerExecutionRepo) Heartbeat(
 	context.Context, int64, string, string, time.Time,
 ) (bool, error) {
 	return false, nil
 }
 
-// CompleteSuccess 为测试替身或测试辅助代码提供所需行为。
+// CompleteSuccess 为测试替身或测试辅助代码提供所需行为
 func (r *stubReconcilerExecutionRepo) CompleteSuccess(
 	context.Context, int64, string, string, time.Time, int, string, int64,
 ) (bool, error) {
 	return false, nil
 }
 
-// CompleteFailure 为测试替身或测试辅助代码提供所需行为。
+// CompleteFailure 为测试替身或测试辅助代码提供所需行为
 func (r *stubReconcilerExecutionRepo) CompleteFailure(
 	context.Context,
 	*model.TimerExecution,
@@ -76,14 +76,14 @@ func (r *stubReconcilerExecutionRepo) CompleteFailure(
 	return false, false, nil
 }
 
-// CountByStatus 为测试替身或测试辅助代码提供所需行为。
+// CountByStatus 为测试替身或测试辅助代码提供所需行为
 func (r *stubReconcilerExecutionRepo) CountByStatus(
 	context.Context,
 ) (map[model.ExecutionStatus]int64, error) {
 	return r.states, nil
 }
 
-// TestReconcilerRunsRecoveryAndCleanup 验证对应的测试场景。
+// TestReconcilerRunsRecoveryAndCleanup 验证对应的测试场景
 func TestReconcilerRunsRecoveryAndCleanup(t *testing.T) {
 	recoveryRepo := &stubRecoveryRepo{
 		result: repository.RecoveryResult{

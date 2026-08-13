@@ -7,7 +7,7 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
-// 默认使用空日志器，避免测试或初始化失败路径发生 nil panic。
+// 默认使用空日志器，避免测试或初始化失败路径发生 nil panic
 var log = zap.NewNop()
 
 // Init 初始化日志

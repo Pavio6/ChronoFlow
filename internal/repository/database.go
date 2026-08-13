@@ -57,7 +57,7 @@ func InitDatabase(cfg *config.DatabaseConfig) error {
 	return nil
 }
 
-// databaseLogLevel 将配置字符串转换为 GORM 日志级别。
+// databaseLogLevel 将配置字符串转换为 GORM 日志级别
 func databaseLogLevel(value string) gormlogger.LogLevel {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "silent":

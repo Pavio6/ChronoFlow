@@ -11,7 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// TestOperationalHealthIncludesRole 验证对应的测试场景。
+// TestOperationalHealthIncludesRole 验证对应的测试场景
 func TestOperationalHealthIncludesRole(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -48,7 +48,7 @@ func TestOperationalHealthIncludesRole(t *testing.T) {
 	}
 }
 
-// TestOperationalReadiness 验证对应的测试场景。
+// TestOperationalReadiness 验证对应的测试场景
 func TestOperationalReadiness(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

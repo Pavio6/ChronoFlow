@@ -12,10 +12,10 @@ import (
 	"github.com/chronoflow/internal/pkg/logger"
 )
 
-// Builder 用于构建一个独立部署的 ChronoFlow 角色。
+// Builder 用于构建一个独立部署的 ChronoFlow 角色
 type Builder func(*config.Config) (*app.Application, error)
 
-// Main 加载共享运行配置并启动一个角色。
+// Main 加载共享运行配置并启动一个角色
 func Main(build Builder) {
 	if err := Run(build); err != nil {
 		fmt.Fprintf(os.Stderr, "ChronoFlow failed to start: %v\n", err)
@@ -23,7 +23,7 @@ func Main(build Builder) {
 	}
 }
 
-// Run 从 Main 中拆出，以保持各角色入口精简且便于测试。
+// Run 从 Main 中拆出，以保持各角色入口精简且便于测试
 func Run(build Builder) error {
 	if build == nil {
 		return fmt.Errorf("role builder is required")

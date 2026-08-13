@@ -7,7 +7,7 @@ import (
 	"strings"
 )
 
-// Action 表示迁移命令请求的操作类型。
+// Action 表示迁移命令请求的操作类型
 type Action string
 
 const (
@@ -17,16 +17,16 @@ const (
 	ActionForce   Action = "force"
 )
 
-// Command 保存迁移命令的操作与版本参数；迁移发现、排序、加锁和版本记录由 golang-migrate 负责。
+// Command 保存迁移命令的操作与版本参数；迁移发现、排序、加锁和版本记录由 golang-migrate 负责
 type Command struct {
 	Action  Action
 	Version int
 }
 
-// ErrHelp 表示调用方应输出迁移命令的帮助信息。
+// ErrHelp 表示调用方应输出迁移命令的帮助信息
 var ErrHelp = errors.New("migration help requested")
 
-// ParseCommand 解析 `chronoflow migrate` 后的命令行参数。
+// ParseCommand 解析 `chronoflow migrate` 后的命令行参数
 func ParseCommand(args []string) (Command, error) {
 	if len(args) == 0 {
 		return Command{}, fmt.Errorf("missing migration action")
@@ -58,7 +58,7 @@ func ParseCommand(args []string) (Command, error) {
 	}
 }
 
-// positiveInt 将字符串解析为正整数。
+// positiveInt 将字符串解析为正整数
 func positiveInt(value string) (int, error) {
 	parsed, err := strconv.Atoi(value)
 	if err != nil || parsed < 1 {
@@ -67,7 +67,7 @@ func positiveInt(value string) (int, error) {
 	return parsed, nil
 }
 
-// Usage 返回迁移命令的帮助文本。
+// Usage 返回迁移命令的帮助文本
 func Usage() string {
 	return `Usage:
   chronoflow migrate up

@@ -21,7 +21,7 @@ type TimerDefinitionRepository interface {
 	List(req *model.TimerDefinitionListRequest) ([]*model.TimerDefinition, int64, error)
 	// CountListByStatus 按列表筛选条件统计可见定时器状态
 	CountListByStatus(req *model.TimerDefinitionListRequest) (map[model.TimerStatus]int64, error)
-	// UpdateScheduleState 有条件地更新状态和 next_fire_at。
+	// UpdateScheduleState 有条件地更新状态和 next_fire_at
 	UpdateScheduleState(id int64, from, to model.TimerStatus, nextFireAt *time.Time) error
 	// CountByStatus 按定时器状态统计数量
 	CountByStatus() (map[model.TimerStatus]int64, error)
@@ -77,7 +77,7 @@ func (r *timerDefinitionRepo) Delete(id int64) error {
 	return nil
 }
 
-// UpdateScheduleState 更新状态转换，避免并发激活或停用请求相互覆盖。
+// UpdateScheduleState 更新状态转换，避免并发激活或停用请求相互覆盖
 func (r *timerDefinitionRepo) UpdateScheduleState(
 	id int64,
 	from model.TimerStatus,
@@ -144,7 +144,7 @@ func (r *timerDefinitionRepo) List(req *model.TimerDefinitionListRequest) ([]*mo
 	return items, total, nil
 }
 
-// CountListByStatus 按列表筛选条件统计未删除的定时器状态。
+// CountListByStatus 按列表筛选条件统计未删除的定时器状态
 func (r *timerDefinitionRepo) CountListByStatus(req *model.TimerDefinitionListRequest) (map[model.TimerStatus]int64, error) {
 	type row struct {
 		Status model.TimerStatus

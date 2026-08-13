@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Scheduler 将到期 Timer 转换为持久化 Execution 和 Outbox 事件，不直接依赖 Redis。
+// Scheduler 将到期 Timer 转换为持久化 Execution 和 Outbox 事件，不直接依赖 Redis
 type Scheduler struct {
 	repo     repository.DueTimerRepository
 	parser   *cron.CronParser
@@ -23,7 +23,7 @@ type Scheduler struct {
 	now      func() time.Time
 }
 
-// NewScheduler 创建以 MySQL 为权威数据源的定时调度器。
+// NewScheduler 创建以 MySQL 为权威数据源的定时调度器
 func NewScheduler(
 	repo repository.DueTimerRepository,
 	parser *cron.CronParser,
@@ -39,7 +39,7 @@ func NewScheduler(
 	}
 }
 
-// Start 按配置的轮询间隔扫描并调度到期 Timer。
+// Start 按配置的轮询间隔扫描并调度到期 Timer
 func (s *Scheduler) Start(ctx context.Context) {
 	logger.Info("Scheduler started",
 		zap.Int("poll_interval_ms", s.cfg.PollIntervalMS),
@@ -60,7 +60,7 @@ func (s *Scheduler) Start(ctx context.Context) {
 	}
 }
 
-// schedule 执行一次到期 Timer 领取、Execution 创建与指标上报。
+// schedule 执行一次到期 Timer 领取、Execution 创建与指标上报
 func (s *Scheduler) schedule(ctx context.Context) {
 	start := time.Now()
 	now := s.now()
@@ -87,7 +87,8 @@ func (s *Scheduler) schedule(ctx context.Context) {
 	}
 }
 
-// resolveTimer 根据 Cron 和错过触发策略生成本轮触发点及新的 next_fire_at。
+// resolveTimer 根据 Cron 和错过触发策略生成本轮触发点及新的 next_fire_at
+// 返回值依次为本轮需要创建 Execution 的触发点列表、推进后的下一次触发时间和计算错误
 func (s *Scheduler) resolveTimer(
 	definition *model.TimerDefinition,
 	now time.Time,
@@ -133,16 +134,22 @@ func (s *Scheduler) resolveTimer(
 		if limit < 1 {
 			limit = s.cfg.DefaultMaxCatchUp
 		}
+		// 预分配最多容纳 limit 个历史触发点的列表，避免补发过程中重复扩容
 		occurrences := make([]time.Time, 0, limit)
+		// cursor 始终指向当前尚未处理的历史触发点，初始值为原 next_fire_at
 		cursor := current
+		// 仅补发不晚于当前时间的触发点，并在达到上限时停止，避免恢复后任务堆积
 		for !cursor.After(now) && len(occurrences) < limit {
+			// 当前 cursor 是一个遗漏触发点，为它创建一条 Execution
 			occurrences = append(occurrences, cursor)
+			// 计算下一个历史触发点，作为下一轮循环的游标
 			next, err := nextAfter(cursor)
 			if err != nil {
 				return nil, time.Time{}, err
 			}
 			cursor = next
 		}
+		// cursor 已推进到第一个未补发的触发点，作为新的 next_fire_at 返回
 		return occurrences, cursor, nil
 	default:
 		return nil, time.Time{}, fmt.Errorf("unknown misfire policy: %s", policy)

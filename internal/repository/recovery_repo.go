@@ -40,12 +40,12 @@ type recoveryRepo struct {
 	db *gorm.DB
 }
 
-// NewRecoveryRepository 创建用于执行恢复和历史清理的仓库。
+// NewRecoveryRepository 创建用于执行恢复和历史清理的仓库
 func NewRecoveryRepository(db *gorm.DB) RecoveryRepository {
 	return &recoveryRepo{db: db}
 }
 
-// RecoverBatch 恢复超时、停滞或需要重新投递的 Execution。
+// RecoverBatch 恢复超时、停滞或需要重新投递的 Execution
 func (r *recoveryRepo) RecoverBatch(
 	ctx context.Context,
 	now time.Time,
@@ -150,7 +150,7 @@ func (r *recoveryRepo) RecoverBatch(
 	return result, nil
 }
 
-// Cleanup 删除超过保留期限的已发布 Outbox 和终态 Execution。
+// Cleanup 删除超过保留期限的已发布 Outbox 和终态 Execution
 func (r *recoveryRepo) Cleanup(
 	ctx context.Context,
 	outboxBefore time.Time,

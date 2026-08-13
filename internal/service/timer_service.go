@@ -152,7 +152,7 @@ func (s *TimerService) List(req *model.TimerDefinitionListRequest) (*model.Timer
 	}, nil
 }
 
-// Activate 计算并保存权威的首次 next_fire_at，然后激活 Timer。
+// Activate 计算并保存权威的首次 next_fire_at，然后激活 Timer
 func (s *TimerService) Activate(id int64) error {
 	def, err := s.defRepo.GetByID(id)
 	if err != nil {

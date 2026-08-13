@@ -8,7 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// TestAPISecurityRequiresConfiguredKeyOnlyForAPI 验证对应的测试场景。
+// TestAPISecurityRequiresConfiguredKeyOnlyForAPI 验证对应的测试场景
 func TestAPISecurityRequiresConfiguredKeyOnlyForAPI(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
@@ -37,7 +37,7 @@ func TestAPISecurityRequiresConfiguredKeyOnlyForAPI(t *testing.T) {
 	}
 }
 
-// TestCORSReflectsOnlyAllowedOrigin 验证对应的测试场景。
+// TestCORSReflectsOnlyAllowedOrigin 验证对应的测试场景
 func TestCORSReflectsOnlyAllowedOrigin(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()

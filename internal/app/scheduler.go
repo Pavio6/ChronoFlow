@@ -8,7 +8,7 @@ import (
 	"github.com/chronoflow/internal/service"
 )
 
-// NewScheduler 创建只负责权威调度与执行修复的 Scheduler 进程。
+// NewScheduler 创建只负责权威调度与执行修复的 Scheduler 进程
 func NewScheduler(cfg *config.Config) (*Application, error) {
 	application, err := newApplication(cfg, RoleScheduler)
 	if err != nil {
@@ -20,7 +20,7 @@ func NewScheduler(cfg *config.Config) (*Application, error) {
 	return application, nil
 }
 
-// configureScheduler 注册 Scheduler 与 Reconciler 后台服务。
+// configureScheduler 注册 Scheduler 与 Reconciler 后台服务
 func (a *Application) configureScheduler(reporter *metrics.Reporter) {
 	cronParser := cron.NewCronParser()
 	scheduler := service.NewScheduler(

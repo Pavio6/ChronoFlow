@@ -35,7 +35,7 @@ const (
 	ResultFailed  = "failed"
 )
 
-// Reporter 管理对监控系统暴露的低基数指标。
+// Reporter 管理对监控系统暴露的低基数指标
 type Reporter struct {
 	schedulerBatches       *prometheus.CounterVec
 	schedulerExecutions    prometheus.Counter
@@ -59,7 +59,7 @@ var (
 	reporterOnce     sync.Once
 )
 
-// NewReporter 返回单例指标报告器，并确保指标仅注册一次。
+// NewReporter 返回单例指标报告器，并确保指标仅注册一次
 func NewReporter() *Reporter {
 	reporterOnce.Do(func() {
 		reporterInstance = &Reporter{
@@ -149,7 +149,7 @@ func NewReporter() *Reporter {
 	return reporterInstance
 }
 
-// ReportSchedulerBatch 记录一次 Scheduler 事务的结果和统计数据。
+// ReportSchedulerBatch 记录一次 Scheduler 事务的结果和统计数据
 func (r *Reporter) ReportSchedulerBatch(
 	_ int,
 	executions int,
@@ -167,7 +167,7 @@ func (r *Reporter) ReportSchedulerBatch(
 	r.schedulerBatchDuration.Observe(duration.Seconds())
 }
 
-// ReportOutboxPublish 记录一次 Redis Stream 发布尝试的结果。
+// ReportOutboxPublish 记录一次 Redis Stream 发布尝试的结果
 func (r *Reporter) ReportOutboxPublish(success bool) {
 	result := ResultFailed
 	if success {
@@ -176,53 +176,53 @@ func (r *Reporter) ReportOutboxPublish(success bool) {
 	r.outboxPublish.WithLabelValues(result).Inc()
 }
 
-// SetOutboxUnpublished 设置尚未发布的 Outbox 事件数量。
+// SetOutboxUnpublished 设置尚未发布的 Outbox 事件数量
 func (r *Reporter) SetOutboxUnpublished(count int64) {
 	r.outboxUnpublished.Set(float64(count))
 }
 
-// ReportWorkerExecution 记录一次 Worker 回调执行的结果和耗时。
+// ReportWorkerExecution 记录一次 Worker 回调执行的结果和耗时
 func (r *Reporter) ReportWorkerExecution(result string, duration time.Duration) {
 	r.workerExecutions.WithLabelValues(result).Inc()
 	r.workerDuration.WithLabelValues(result).Observe(duration.Seconds())
 }
 
-// ReportWorkerRetry 累加 Worker 重试次数。
+// ReportWorkerRetry 累加 Worker 重试次数
 func (r *Reporter) ReportWorkerRetry() {
 	r.workerRetries.Inc()
 }
 
-// ReportWorkerLeaseLost 累加 Worker 丢失 Execution Lease 的次数。
+// ReportWorkerLeaseLost 累加 Worker 丢失 Execution Lease 的次数
 func (r *Reporter) ReportWorkerLeaseLost() {
 	r.workerLeaseLost.Inc()
 }
 
-// ReportWorkerRedelivery 累加 Worker 重新领取 Pending 消息的次数。
+// ReportWorkerRedelivery 累加 Worker 重新领取 Pending 消息的次数
 func (r *Reporter) ReportWorkerRedelivery() {
 	r.workerRedeliveries.Inc()
 }
 
-// SetWorkerPending 设置 Consumer Group 中 Pending 消息的数量。
+// SetWorkerPending 设置 Consumer Group 中 Pending 消息的数量
 func (r *Reporter) SetWorkerPending(count int64) {
 	r.workerPending.Set(float64(count))
 }
 
-// ReportRecoveryAction 按类型累加执行恢复操作的数量。
+// ReportRecoveryAction 按类型累加执行恢复操作的数量
 func (r *Reporter) ReportRecoveryAction(action string, count int) {
 	r.recoveryActions.WithLabelValues(action).Add(float64(count))
 }
 
-// ReportRecoveryFailure 累加 Reconciler 扫描或清理失败的次数。
+// ReportRecoveryFailure 累加 Reconciler 扫描或清理失败的次数
 func (r *Reporter) ReportRecoveryFailure() {
 	r.recoveryFailures.Inc()
 }
 
-// SetExecutionCount 设置指定状态的 Execution 数量。
+// SetExecutionCount 设置指定状态的 Execution 数量
 func (r *Reporter) SetExecutionCount(status string, count int64) {
 	r.executions.WithLabelValues(status).Set(float64(count))
 }
 
-// GetHandler 返回 Prometheus 指标的 HTTP 处理器。
+// GetHandler 返回 Prometheus 指标的 HTTP 处理器
 func (r *Reporter) GetHandler() http.Handler {
 	return promhttp.Handler()
 }

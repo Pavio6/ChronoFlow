@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// TestQueryRangeParsesPrometheusMatrixAndSkipsNaN 验证对应的测试场景。
+// TestQueryRangeParsesPrometheusMatrixAndSkipsNaN 验证对应的测试场景
 func TestQueryRangeParsesPrometheusMatrixAndSkipsNaN(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.URL.Query().Get("query"); got != "up" {
@@ -35,7 +35,7 @@ func TestQueryRangeParsesPrometheusMatrixAndSkipsNaN(t *testing.T) {
 	}
 }
 
-// TestHistoryWindowAllowsSupportedRangesOnly 验证对应的测试场景。
+// TestHistoryWindowAllowsSupportedRangesOnly 验证对应的测试场景
 func TestHistoryWindowAllowsSupportedRangesOnly(t *testing.T) {
 	tests := []struct {
 		raw     string

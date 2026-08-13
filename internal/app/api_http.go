@@ -20,7 +20,7 @@ type apiDependencies struct {
 	executionRepo repository.ExecutionQueryRepository
 }
 
-// newAPIHTTPHandler 创建包含业务接口、监控接口和静态资源的 HTTP 处理器。
+// newAPIHTTPHandler 创建包含业务接口、监控接口和静态资源的 HTTP 处理器
 func newAPIHTTPHandler(
 	cfg *config.Config,
 	role Role,

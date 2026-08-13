@@ -16,7 +16,7 @@ type streamDependencies struct {
 	consumer  *redisstream.StreamConsumer
 }
 
-// connectStream 建立 Redis 连接并创建 Stream 发布者和消费者。
+// connectStream 建立 Redis 连接并创建 Stream 发布者和消费者
 func (a *Application) connectStream() (*streamDependencies, error) {
 	client, err := redisstream.InitRedis(a.cfg.Redis.Addr, a.cfg.Redis.Password, a.cfg.Redis.DB)
 	if err != nil {
@@ -35,7 +35,7 @@ func (a *Application) connectStream() (*streamDependencies, error) {
 	}, nil
 }
 
-// checkStreamReadiness 返回同时检查 MySQL 与 Redis 的就绪检查函数。
+// checkStreamReadiness 返回同时检查 MySQL 与 Redis 的就绪检查函数
 func (a *Application) checkStreamReadiness(client *goredis.Client) readinessChecker {
 	return func(ctx context.Context) map[string]string {
 		failures := a.checkMySQLReadiness(ctx)

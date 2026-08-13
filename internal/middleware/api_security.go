@@ -8,7 +8,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// APISecurity 对 API 接口执行可选的部署期密钥校验和请求体大小限制，运行状态接口保持可访问。
+// APISecurity 对 API 接口执行可选的部署期密钥校验和请求体大小限制，运行状态接口保持可访问
 func APISecurity(apiKey string, maxRequestBytes int64) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if !strings.HasPrefix(c.Request.URL.Path, "/api/") {

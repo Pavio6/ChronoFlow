@@ -8,7 +8,7 @@ import (
 	"github.com/chronoflow/internal/config"
 )
 
-// RunCLI 使用项目配置执行发布阶段的迁移命令。
+// RunCLI 使用项目配置执行发布阶段的迁移命令
 func RunCLI(args []string, output io.Writer) error {
 	command, err := ParseCommand(args)
 	if errors.Is(err, ErrHelp) {

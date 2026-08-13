@@ -39,12 +39,12 @@ type outboxRepo struct {
 	db *gorm.DB
 }
 
-// NewOutboxRepository 创建 Outbox 事件仓库。
+// NewOutboxRepository 创建 Outbox 事件仓库
 func NewOutboxRepository(db *gorm.DB) OutboxRepository {
 	return &outboxRepo{db: db}
 }
 
-// ClaimBatch 在事务内领取一批可发布的 Outbox 事件并写入领取 Lease。
+// ClaimBatch 在事务内领取一批可发布的 Outbox 事件并写入领取 Lease
 func (r *outboxRepo) ClaimBatch(
 	ctx context.Context,
 	owner string,
@@ -96,7 +96,7 @@ func (r *outboxRepo) ClaimBatch(
 	return events, nil
 }
 
-// MarkPublished 在仍持有领取 Lease 时记录事件已发布。
+// MarkPublished 在仍持有领取 Lease 时记录事件已发布
 func (r *outboxRepo) MarkPublished(
 	ctx context.Context,
 	eventID string,
@@ -124,7 +124,7 @@ func (r *outboxRepo) MarkPublished(
 	return nil
 }
 
-// MarkFailed 在仍持有领取 Lease 时记录发布失败并安排下一次重试。
+// MarkFailed 在仍持有领取 Lease 时记录发布失败并安排下一次重试
 func (r *outboxRepo) MarkFailed(
 	ctx context.Context,
 	eventID string,
@@ -151,7 +151,7 @@ func (r *outboxRepo) MarkFailed(
 	return nil
 }
 
-// CountUnpublished 返回尚未成功发布的 Outbox 事件数量。
+// CountUnpublished 返回尚未成功发布的 Outbox 事件数量
 func (r *outboxRepo) CountUnpublished(ctx context.Context) (int64, error) {
 	var count int64
 	if err := r.db.WithContext(ctx).

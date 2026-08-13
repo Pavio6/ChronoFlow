@@ -1,6 +1,6 @@
 package app
 
-// Role 表示一个可部署的 ChronoFlow 运行角色；RoleAll 仅用于本地开发组合。
+// Role 表示一个可部署的 ChronoFlow 运行角色；RoleAll 仅用于本地开发组合
 type Role string
 
 const (
@@ -19,7 +19,7 @@ var allRoles = []Role{
 	RoleAll,
 }
 
-// RuntimeMode 返回健康检查接口展示的角色运行模式。
+// RuntimeMode 返回健康检查接口展示的角色运行模式
 func (r Role) RuntimeMode() string {
 	switch r {
 	case RoleAPI:
@@ -37,7 +37,7 @@ func (r Role) RuntimeMode() string {
 	}
 }
 
-// Components 返回该角色拥有的运行组件名称。
+// Components 返回该角色拥有的运行组件名称
 func (r Role) Components() []string {
 	switch r {
 	case RoleAPI:

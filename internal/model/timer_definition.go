@@ -14,15 +14,15 @@ const (
 	TimerStatusDeleted TimerStatus = "DELETED"
 )
 
-// MisfirePolicy 定义 Scheduler 错过一个或多个触发点后的补偿方式。
+// MisfirePolicy 定义 Scheduler 错过一个或多个触发点后的补偿方式
 type MisfirePolicy string
 
 const (
-	// MisfirePolicySkip 跳过所有已错过的触发点，只计算并保留未来的下一次触发时间。
+	// MisfirePolicySkip 跳过所有已错过的触发点，只计算并保留未来的下一次触发时间
 	MisfirePolicySkip MisfirePolicy = "SKIP"
-	// MisfirePolicyFireOnce 将已错过的触发点合并为一次立即补发，然后推进到未来的下一次触发时间。
+	// MisfirePolicyFireOnce 将已错过的触发点合并为一次立即补发，然后推进到未来的下一次触发时间
 	MisfirePolicyFireOnce MisfirePolicy = "FIRE_ONCE"
-	// MisfirePolicyCatchUp 按时间顺序补发多个已错过的触发点，数量受 max_catch_up 限制。
+	// MisfirePolicyCatchUp 按时间顺序补发多个已错过的触发点，数量受 max_catch_up 限制
 	MisfirePolicyCatchUp MisfirePolicy = "CATCH_UP"
 )
 
@@ -81,7 +81,7 @@ type TimerDefinitionListResponse struct {
 	Stats    TimerDefinitionListStats `json:"stats"`
 }
 
-// TimerDefinitionListStats 定时器列表顶部使用的全量可见状态统计。
+// TimerDefinitionListStats 定时器列表顶部使用的全量可见状态统计
 type TimerDefinitionListStats struct {
 	Total    int64 `json:"total"`
 	Active   int64 `json:"active"`

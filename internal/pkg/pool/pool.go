@@ -8,7 +8,7 @@ import (
 	"github.com/panjf2000/ants/v2"
 )
 
-// WorkerPool 定义服务提交任务所需的协程池能力，并便于测试替身实现。
+// WorkerPool 定义服务提交任务所需的协程池能力，并便于测试替身实现
 type WorkerPool interface {
 	Submit(task func()) error
 }
@@ -32,7 +32,7 @@ func NewGoWorkerPool(size int) (*GoWorkerPool, error) {
 }
 
 // Submit 提交任务到协程池
-// ants 默认使用阻塞提交语义；池满时等待空闲 worker，而不是丢弃任务。
+// ants 默认使用阻塞提交语义；池满时等待空闲 worker，而不是丢弃任务
 func (p *GoWorkerPool) Submit(task func()) error {
 	if err := p.pool.Submit(task); err != nil {
 		return fmt.Errorf("submit task to ants worker pool: %w", err)
@@ -46,7 +46,7 @@ func (p *GoWorkerPool) Release() {
 	p.pool.Release()
 }
 
-// ReleaseTimeout 停止接受新任务，并在指定时间内等待运行中的任务结束。
+// ReleaseTimeout 停止接受新任务，并在指定时间内等待运行中的任务结束
 func (p *GoWorkerPool) ReleaseTimeout(timeout time.Duration) error {
 	if err := p.pool.ReleaseTimeout(timeout); err != nil {
 		return fmt.Errorf("wait for worker pool shutdown: %w", err)
@@ -54,7 +54,7 @@ func (p *GoWorkerPool) ReleaseTimeout(timeout time.Duration) error {
 	return nil
 }
 
-// ReleaseContext 停止接受新任务，并使用调用方提供的截止时间等待任务结束。
+// ReleaseContext 停止接受新任务，并使用调用方提供的截止时间等待任务结束
 func (p *GoWorkerPool) ReleaseContext(ctx context.Context) error {
 	if err := p.pool.ReleaseContext(ctx); err != nil {
 		return fmt.Errorf("wait for worker pool shutdown: %w", err)

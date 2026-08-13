@@ -12,7 +12,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// Reconciler 独立于 Redis 可用性修复持久化 Execution。
+// Reconciler 独立于 Redis 可用性修复持久化 Execution
 type Reconciler struct {
 	recoveryRepo  repository.RecoveryRepository
 	executionRepo repository.TimerExecutionRepository
@@ -21,7 +21,7 @@ type Reconciler struct {
 	now           func() time.Time
 }
 
-// NewReconciler 创建负责执行恢复、清理和指标采集的 Reconciler。
+// NewReconciler 创建负责执行恢复、清理和指标采集的 Reconciler
 func NewReconciler(
 	recoveryRepo repository.RecoveryRepository,
 	executionRepo repository.TimerExecutionRepository,
@@ -37,7 +37,7 @@ func NewReconciler(
 	}
 }
 
-// Start 按配置间隔执行恢复、清理和 Execution 指标采集。
+// Start 按配置间隔执行恢复、清理和 Execution 指标采集
 func (r *Reconciler) Start(ctx context.Context) {
 	if !r.cfg.Enabled {
 		return
@@ -68,7 +68,7 @@ func (r *Reconciler) Start(ctx context.Context) {
 	}
 }
 
-// reconcile 扫描并恢复停滞、Lease 过期或需要重新投递的 Execution。
+// reconcile 扫描并恢复停滞、Lease 过期或需要重新投递的 Execution
 func (r *Reconciler) reconcile(ctx context.Context) {
 	now := r.now()
 	result, err := r.recoveryRepo.RecoverBatch(
@@ -95,7 +95,7 @@ func (r *Reconciler) reconcile(ctx context.Context) {
 	r.collectExecutionMetrics(ctx)
 }
 
-// cleanup 清理超过保留期限的 Outbox 事件和终态 Execution。
+// cleanup 清理超过保留期限的 Outbox 事件和终态 Execution
 func (r *Reconciler) cleanup(ctx context.Context) {
 	now := r.now()
 	result, err := r.recoveryRepo.Cleanup(
@@ -115,7 +115,7 @@ func (r *Reconciler) cleanup(ctx context.Context) {
 	)
 }
 
-// collectExecutionMetrics 统计并上报各 Execution 状态的数量。
+// collectExecutionMetrics 统计并上报各 Execution 状态的数量
 func (r *Reconciler) collectExecutionMetrics(ctx context.Context) {
 	counts, err := r.executionRepo.CountByStatus(ctx)
 	if err != nil {
@@ -143,7 +143,7 @@ type streamRetention interface {
 	) (int64, error)
 }
 
-// StreamRetentionCleaner 仅删除已确认的历史消息，并保留最早 Pending 消息边界。
+// StreamRetentionCleaner 仅删除已确认的历史消息，并保留最早 Pending 消息边界
 type StreamRetentionCleaner struct {
 	stream   streamRetention
 	reporter *metrics.Reporter
@@ -152,7 +152,7 @@ type StreamRetentionCleaner struct {
 	now      func() time.Time
 }
 
-// NewStreamRetentionCleaner 创建 Redis Stream 保留数据清理器。
+// NewStreamRetentionCleaner 创建 Redis Stream 保留数据清理器
 func NewStreamRetentionCleaner(
 	stream streamRetention,
 	reporter *metrics.Reporter,
@@ -168,7 +168,7 @@ func NewStreamRetentionCleaner(
 	}
 }
 
-// Start 按配置间隔清理超过保留期限的已确认 Stream 消息。
+// Start 按配置间隔清理超过保留期限的已确认 Stream 消息
 func (c *StreamRetentionCleaner) Start(ctx context.Context) {
 	if !c.recovery.Enabled {
 		return
@@ -187,7 +187,7 @@ func (c *StreamRetentionCleaner) Start(ctx context.Context) {
 	}
 }
 
-// cleanup 执行一次已确认 Stream 消息清理并上报结果。
+// cleanup 执行一次已确认 Stream 消息清理并上报结果
 func (c *StreamRetentionCleaner) cleanup(ctx context.Context) {
 	trimmed, err := c.stream.TrimAcknowledgedBefore(
 		ctx,

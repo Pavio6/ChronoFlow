@@ -12,15 +12,15 @@ import (
 	_ "github.com/golang-migrate/migrate/v4/source/file"
 )
 
-// Result 表示一次迁移命令的可观察结果。
+// Result 表示一次迁移命令的可观察结果
 type Result struct {
 	Version uint
 	Dirty   bool
 	Changed bool
 }
 
-// Execute 通过配置的 MySQL DSN 执行 golang-migrate 操作。
-// MySQL 驱动负责维护 schema_migrations，并通过数据库锁串行化并发迁移。
+// Execute 通过配置的 MySQL DSN 执行 golang-migrate 操作
+// MySQL 驱动负责维护 schema_migrations，并通过数据库锁串行化并发迁移
 func Execute(dsn, migrationPath string, command Command) (result Result, err error) {
 	if strings.TrimSpace(dsn) == "" {
 		return result, errors.New("database dsn is required")
@@ -80,7 +80,7 @@ func Execute(dsn, migrationPath string, command Command) (result Result, err err
 	return result, nil
 }
 
-// mysqlURL 将普通 MySQL DSN 转换为 golang-migrate 所需的 URL 格式。
+// mysqlURL 将普通 MySQL DSN 转换为 golang-migrate 所需的 URL 格式
 func mysqlURL(dsn string) string {
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(dsn)), "mysql://") {
 		return dsn
@@ -88,7 +88,7 @@ func mysqlURL(dsn string) string {
 	return "mysql://" + dsn
 }
 
-// fileSourceURL 将迁移目录解析为 golang-migrate 所需的文件 URL。
+// fileSourceURL 将迁移目录解析为 golang-migrate 所需的文件 URL
 func fileSourceURL(migrationPath string) (string, error) {
 	path := strings.TrimSpace(migrationPath)
 	if path == "" {

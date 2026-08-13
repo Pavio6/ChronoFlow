@@ -15,7 +15,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// NewWorker 创建只负责消费 Redis Stream 并执行回调的 Worker 进程。
+// NewWorker 创建只负责消费 Redis Stream 并执行回调的 Worker 进程
 func NewWorker(cfg *config.Config) (*Application, error) {
 	application, err := newApplication(cfg, RoleWorker)
 	if err != nil {
@@ -38,7 +38,7 @@ func NewWorker(cfg *config.Config) (*Application, error) {
 	return application, nil
 }
 
-// configureWorker 初始化 Consumer Group、ants 协程池及 Worker 后台服务。
+// configureWorker 初始化 Consumer Group、ants 协程池及 Worker 后台服务
 func (a *Application) configureWorker(
 	reporter *metrics.Reporter,
 	publisher *redisstream.StreamPublisher,

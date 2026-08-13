@@ -112,7 +112,7 @@ var historyQueries = map[string]string{
 	"abnormal_executions": `sum(chronoflow_executions{status=~"PENDING|RUNNING|RETRY_WAIT"})`,
 }
 
-// GetHistory 返回由 Prometheus 存储的固定监控历史序列。
+// GetHistory 返回由 Prometheus 存储的固定监控历史序列
 func (h *MonitoringHandler) GetHistory(c *gin.Context) {
 	rangeMinutes, stepSeconds := historyWindow(c.Query("range_minutes"))
 	end := time.Now()
@@ -159,7 +159,7 @@ func (h *MonitoringHandler) GetHistory(c *gin.Context) {
 	})
 }
 
-// historyWindow 根据请求参数返回历史查询范围与采样步长。
+// historyWindow 根据请求参数返回历史查询范围与采样步长
 func historyWindow(raw string) (int, int) {
 	switch raw {
 	case "15":
@@ -173,7 +173,7 @@ func historyWindow(raw string) (int, int) {
 	}
 }
 
-// queryRange 查询 Prometheus 区间数据并转换为历史数据点。
+// queryRange 查询 Prometheus 区间数据并转换为历史数据点
 func (h *MonitoringHandler) queryRange(ctx context.Context, query string, start, end time.Time, stepSeconds int) ([]historyPoint, error) {
 	endpoint, err := url.Parse(strings.TrimRight(h.promURL, "/") + "/api/v1/query_range")
 	if err != nil {
@@ -232,7 +232,7 @@ func (h *MonitoringHandler) queryRange(ctx context.Context, query string, start,
 	return points, nil
 }
 
-// sumTimerStats 汇总各 Timer 状态的数量。
+// sumTimerStats 汇总各 Timer 状态的数量
 func sumTimerStats(stats map[model.TimerStatus]int64) int64 {
 	var total int64
 	for _, count := range stats {
@@ -241,7 +241,7 @@ func sumTimerStats(stats map[model.TimerStatus]int64) int64 {
 	return total
 }
 
-// sumExecutionStats 汇总各 Execution 状态的数量。
+// sumExecutionStats 汇总各 Execution 状态的数量
 func sumExecutionStats(stats map[model.ExecutionStatus]int64) int64 {
 	var total int64
 	for _, count := range stats {

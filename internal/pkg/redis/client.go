@@ -8,7 +8,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 )
 
-// InitRedis 创建 Redis 客户端，并在进程开始处理任务前验证服务器可达。
+// InitRedis 创建 Redis 客户端，并在进程开始处理任务前验证服务器可达
 func InitRedis(addr, password string, db int) (*goredis.Client, error) {
 	client := goredis.NewClient(&goredis.Options{
 		Addr:     addr,

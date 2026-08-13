@@ -12,7 +12,7 @@ var timerTransitions = map[TimerStatus][]TimerStatus{
 	TimerStatusDeleted:  {},
 }
 
-// ValidateTimerTransition 验证 Timer 状态转换是否合法。
+// ValidateTimerTransition 验证 Timer 状态转换是否合法
 func ValidateTimerTransition(from, to TimerStatus) error {
 	targets, ok := timerTransitions[from]
 	if !ok {

@@ -21,7 +21,7 @@ type Client struct {
 	allowPrivate    bool
 }
 
-// NewClient 创建带回调安全校验和响应体限制的 HTTP 客户端。
+// NewClient 创建带回调安全校验和响应体限制的 HTTP 客户端
 func NewClient(
 	timeout time.Duration,
 	maxResponseBody int64,
@@ -75,7 +75,7 @@ func NewClient(
 	return client
 }
 
-// ValidateURL 校验回调地址的协议、主机和私网访问限制。
+// ValidateURL 校验回调地址的协议、主机和私网访问限制
 func ValidateURL(rawURL string, allowPrivate bool) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -101,7 +101,7 @@ func ValidateURL(rawURL string, allowPrivate bool) error {
 	return nil
 }
 
-// Execute 使用固定的请求快照执行回调，并返回状态码和响应体。
+// Execute 使用固定的请求快照执行回调，并返回状态码和响应体
 func (c *Client) Execute(
 	ctx context.Context,
 	snapshot *model.CallbackSnapshot,
@@ -154,7 +154,7 @@ func (c *Client) Execute(
 	return response.StatusCode, string(bodyBytes), nil
 }
 
-// isReservedHeader 判断请求头是否由系统保留且不允许回调配置覆盖。
+// isReservedHeader 判断请求头是否由系统保留且不允许回调配置覆盖
 func isReservedHeader(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(name)) {
 	case "host", "content-length", "connection", "transfer-encoding",
@@ -165,18 +165,18 @@ func isReservedHeader(name string) bool {
 	}
 }
 
-// isPrivateAddress 判断 IP 是否属于不应默认访问的私有或特殊地址。
+// isPrivateAddress 判断 IP 是否属于不应默认访问的私有或特殊地址
 func isPrivateAddress(address net.IP) bool {
-	// 回环地址，例如 127.0.0.1、::1，只指向当前机器。
+	// 回环地址，例如 127.0.0.1、::1，只指向当前机器
 	return address.IsLoopback() ||
-		// 私有网络地址，例如 10.0.0.0/8、172.16.0.0/12、192.168.0.0/16。
+		// 私有网络地址，例如 10.0.0.0/8、172.16.0.0/12、192.168.0.0/16
 		address.IsPrivate() ||
-		// 单播链路本地地址，例如 IPv4 的 169.254.0.0/16，只在当前二层网络有效。
+		// 单播链路本地地址，例如 IPv4 的 169.254.0.0/16，只在当前二层网络有效
 		address.IsLinkLocalUnicast() ||
-		// 组播链路本地地址，只能在当前网络链路内传播。
+		// 组播链路本地地址，只能在当前网络链路内传播
 		address.IsLinkLocalMulticast() ||
-		// 未指定地址，例如 0.0.0.0、::，不能作为实际远程目标。
+		// 未指定地址，例如 0.0.0.0、::，不能作为实际远程目标
 		address.IsUnspecified() ||
-		// 组播地址，用于向一组主机发送数据，不是单个 HTTP 回调目标。
+		// 组播地址，用于向一组主机发送数据，不是单个 HTTP 回调目标
 		address.IsMulticast()
 }
