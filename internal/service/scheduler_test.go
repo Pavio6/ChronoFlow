@@ -17,7 +17,7 @@ type stubDueTimerRepo struct {
 	err    error
 }
 
-// ScheduleDueBatch 为测试替身或测试辅助代码提供所需行为。
+// ScheduleDueBatch 为测试替身或测试辅助代码提供所需行为
 func (r *stubDueTimerRepo) ScheduleDueBatch(
 	context.Context,
 	time.Time,
@@ -27,7 +27,7 @@ func (r *stubDueTimerRepo) ScheduleDueBatch(
 	return r.result, r.err
 }
 
-// newTestScheduler 为测试替身或测试辅助代码提供所需行为。
+// newTestScheduler 为测试替身或测试辅助代码提供所需行为
 func newTestScheduler() *Scheduler {
 	return NewScheduler(
 		&stubDueTimerRepo{},
@@ -36,13 +36,13 @@ func newTestScheduler() *Scheduler {
 		&config.SchedulerConfig{
 			BatchSize:           100,
 			PollIntervalMS:      500,
-			MisfireGraceSeconds: 5,
+			MisfireGraceSeconds: 30,
 			DefaultMaxCatchUp:   10,
 		},
 	)
 }
 
-// TestSchedulerNormalOccurrence 验证对应的测试场景。
+// TestSchedulerNormalOccurrence 验证对应的测试场景
 func TestSchedulerNormalOccurrence(t *testing.T) {
 	scheduler := newTestScheduler()
 	now := time.Date(2026, time.August, 7, 10, 0, 0, 500000000, time.Local)
@@ -61,7 +61,7 @@ func TestSchedulerNormalOccurrence(t *testing.T) {
 	}
 }
 
-// TestSchedulerMisfirePolicies 验证对应的测试场景。
+// TestSchedulerMisfirePolicies 验证对应的测试场景
 func TestSchedulerMisfirePolicies(t *testing.T) {
 	scheduler := newTestScheduler()
 	now := time.Date(2026, time.August, 7, 10, 5, 30, 0, time.Local)
@@ -113,7 +113,7 @@ func TestSchedulerMisfirePolicies(t *testing.T) {
 	}
 }
 
-// testDefinition 为测试替身或测试辅助代码提供所需行为。
+// testDefinition 为测试替身或测试辅助代码提供所需行为
 func testDefinition(next time.Time, policy model.MisfirePolicy) *model.TimerDefinition {
 	return &model.TimerDefinition{
 		ID:            1,

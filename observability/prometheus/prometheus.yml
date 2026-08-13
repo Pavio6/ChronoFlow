@@ -11,7 +11,7 @@ scrape_configs:
           - "chronoflow-dispatcher:8082"
           - "chronoflow-worker:8083"
 
-  # `make dev-*` 在宿主机启动各角色时使用这些地址。
+  # `make dev-*` 在宿主机启动各角色时使用这些地址
   - job_name: chronoflow-local
     metrics_path: /metrics
     static_configs:

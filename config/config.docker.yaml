@@ -23,7 +23,9 @@ redis:
 scheduler:
   poll_interval_ms: 500
   batch_size: 100
-  misfire_grace_seconds: 5
+  # next_fire_at 落后当前时间超过该秒数时，Scheduler 按 misfire_policy 处理遗漏触发点
+  misfire_grace_seconds: 30
+  # Timer 未设置 max_catch_up 时，CATCH_UP 策略单轮最多补发的触发点数量
   default_max_catch_up: 10
 
 outbox:

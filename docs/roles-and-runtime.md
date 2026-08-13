@@ -114,7 +114,7 @@ Scheduler 只依赖 MySQL，不依赖 Redis。启动后会立即执行一次调�
 | --- | ---: | --- |
 | `scheduler.poll_interval_ms` | 500 毫秒 | 启动立即扫描一次，之后每 500 毫秒扫描一次 |
 | `scheduler.batch_size` | 100 | 单个 MySQL 事务最多领取 100 个到期 Timer |
-| `scheduler.misfire_grace_seconds` | 5 秒 | 晚于计划时间超过 5 秒视为 misfire |
+| `scheduler.misfire_grace_seconds` | 30 秒 | 晚于计划时间超过 30 秒视为 misfire |
 | `scheduler.default_max_catch_up` | 10 | 创建 Timer 时未传 `max_catch_up` 的默认补偿上限；也用于历史或异常数据中该值无效时的兜底 |
 
 扫描条件为：`status = ACTIVE AND next_fire_at <= 当前时间`。领取查询使用 `SELECT ... FOR UPDATE SKIP LOCKED`，因此可以启动多个 Scheduler：同一个 Timer 行被一个实例锁定时，其他实例会跳过它，而不是阻塞或重复调度。
@@ -131,7 +131,7 @@ Scheduler 只依赖 MySQL，不依赖 Redis。启动后会立即执行一次调�
 
 ### 4.2 Misfire 策略
 
-当 `now - next_fire_at > 5 秒`（默认宽限期）时，Timer 被视为错过触发点：
+当 `now - next_fire_at > 30 秒`（默认宽限期）时，Timer 被视为错过触发点：
 
 | 策略 | 行为 |
 | --- | --- |

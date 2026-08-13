@@ -1,5 +1,5 @@
 services:
-  # 可选的前端开发服务器；生产静态文件由 API 角色直接提供。
+  # 可选的前端开发服务器；生产静态文件由 API 角色直接提供
   frontend:
     image: node:22-alpine
     ports:
